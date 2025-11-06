@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Item Limit Master</title>
+    <style>
+        body { background: #f9f6ef; font-family: Arial;}
+        .container { background: #fff; border-radius: 14px; box-shadow: 0 4px 18px #20508111;
+                     max-width: 620px; margin: 44px auto; padding: 30px; }
+        select, input[type='number'] { padding: 6px; font-size: 1rem; margin-right: 6px;}
+        table { width: 100%; border-collapse: collapse;}
+        th, td { padding: 8px 12px; text-align: left; }
+        th { background: #205081; color: #fff;}
+        tr:nth-child(even) { background: #f3f3fa; }
+        .save-btn { background: #205081; color: #fff; border: none; padding: 10px 32px; border-radius: 8px; margin: 14px;}
+        .cat-row { margin-bottom: 18px; }
+        #msg { color: #205081; margin-top: 14px;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Item Limit Master</h2>
+        <div class="cat-row">
+            <label><b>Select Category:</b></label>
+            <select id="category"></select>
+            <label style="margin-left:12px;">Category Limit:</label>
+            <input type="number" min="1" id="cat-limit" style="width:65px;">
+        </div>
+        <table id="items-table">
+            <thead>
+                <tr>
+                    <th>Item Name</th>
+                    <th>Item Limit</th>
+                </tr>
+            </thead>
+            <tbody id="items-body"></tbody>
+        </table>
+        <button class="save-btn" onclick="saveAll()">Save All</button>
+        <div id="msg"></div>
+    </div>
+<script>
+let limits = {}; // {item_name: limit}
+let items = [];
+let currCategory = "";
+// Fetch all categories
+function loadCategories() {
+    fetch('/api/categories').then(r=>r.json()).then(data=>{
+        let sel = document.getElementById('category');
+        sel.innerHTML = "";
+        data.categories.forEach(cat=>{
+            let opt = document.createElement('option');
+            opt.value = cat; opt.innerText = cat;
+            sel.appendChild(opt);
+        });
+        sel.onchange = ()=>loadCategoryLimits(sel.value);
+        if(data.categories.length) {
+            sel.value = data.categories[0];
+            loadCategoryLimits(sel.value);
+        }
+    });
+}
+// Fetch all items for category and current limits
+function loadCategoryLimits(cat) {
+    currCategory = cat;
+    // 1. Fetch items
+    fetch('/api/items_for_category?category=' + encodeURIComponent(cat)).then(r=>r.json()).then(data=>{
+        items = data.items;
+        // 2. Fetch limits
+        fetch('/api/item_limit_master/list').then(r=>r.json()).then(data2=>{
+            let allLimits = data2.limits;
+            // Find category limit (*)
+            let catLim = allLimits.find(x=>x.category===cat && x.item_name==='*');
+            document.getElementById('cat-limit').value = catLim ? catLim.item_limit : 1;
+            // Find each item's limit
+            limits = {};
+            items.forEach(item=>{
+                let limRow = allLimits.find(x=>x.category===cat && x.item_name===item);
+                limits[item] = limRow ? limRow.item_limit : 1;
+            });
+            renderTable();
+        });
+    });
+}
+function renderTable() {
+    let html = "";
+    items.forEach(item=>{
+        html += `<tr>
+            <td>${item}</td>
+            <td><input type="number" min="1" style="width:70px;" value="${limits[item]}"
+                onchange="limits['${item}']=parseInt(this.value||1)"></td>
+        </tr>`;
+    });
+    document.getElementById('items-body').innerHTML = html;
+}
+function saveAll() {
+    let cat = currCategory;
+    let rows = [
+        {category: cat, item_name: '*', item_limit: parseInt(document.getElementById('cat-limit').value||1)}
+    ];
+    items.forEach(item=>{
+        rows.push({category: cat, item_name: item, item_limit: limits[item]});
+    });
+    fetch('/api/item_limit_master/save', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(rows)
+    }).then(r=>r.json()).then(data=>{
+        document.getElementById('msg').innerText = data.success ? "Saved!" : "Error";
+        // Reload for latest
+        loadCategoryLimits(cat);
+    });
+}
+window.onload = loadCategories;
+</script>
+</body>
+</html>

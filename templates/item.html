@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Item Master{% endblock %}
+
+{% block page_css %}
+body { background:#f9f6ef; font-family:sans-serif;}
+.header { display:flex; align-items:center; justify-content:space-between; padding: 18px 32px 0 32px; }
+.logo-main { height: 44px; }
+.logo-right { height: 34px; }
+.container { max-width:560px; margin:40px auto; background:#fff; border-radius:18px; box-shadow:0 4px 24px #20508122; padding:38px 36px 32px 36px;}
+h2 { color:#205081; font-weight:700; margin-bottom:28px;}
+form label {display:inline-block; width:100px; margin-bottom:8px; color:#205081; font-weight:600;}
+form input,form select {width: calc(100% - 110px); margin-bottom:13px; padding:7px 12px; border-radius:8px; border:1px solid #d0dbed;}
+form { display: flex; flex-wrap: wrap; align-items:center; margin-bottom:22px;}
+form label, form input, form select, form button { margin-right:10px;}
+.btn-main { background:#205081; color:#fff; border:none; border-radius:8px; font-weight:600; padding:9px 18px; margin-right:8px; cursor:pointer;}
+.btn-main:hover { background:#ffa500; color:#fff;}
+.btn-reset { background:#e3e6f0; color:#205081; border:none; border-radius:8px; font-weight:600; padding:9px 16px; cursor:pointer;}
+table { width:100%; margin-top:10px; border-collapse:collapse;}
+th,td {padding:9px 11px; border-bottom:1.5px solid #f0f0f0; text-align:center;}
+th { background:#f4f8fb; color:#205081;}
+td button { margin: 0 4px; }
+@media (max-width:600px){
+  .container {padding: 18px 5vw;}
+  form label, form input, form select {width:100%;}
+}
+{% endblock %}
+
+{% block body %}
+<div class="header">
+  <button class="btn btn-main" onclick="location.href='/menu'"><i class="fa fa-arrow-left"></i></button>
+  <img src="/static/img/logo_company.png" class="logo-main" alt="Logo">
+  <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+</div>
+
+<div class="container">
+  <h2>Item Master</h2>
+  <form onsubmit="return false;" id="item-form">
+    <label>Menu</label>
+    <select id="menu_sel"></select>
+
+    <label>Item Code</label>
+    <input id="item_code" type="text" inputmode="latin" required maxlength="16">
+
+    <label>Item Name</label>
+    <input id="item_name" type="text" required>
+
+    <button class="btn-main" onclick="addOrUpdateItem()">Save</button>
+    <button class="btn-reset" onclick="resetForm()" type="button">Reset</button>
+  </form>
+
+  <table id="item_table">
+    <thead><tr><th>Code</th><th>Name</th><th>Menu</th><th>Action</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let items=[],menus=[],edit_code=null;
+
+function load() {
+  fetch('/api/item_master/list').then(r=>r.json()).then(data=>{
+    items = data.items || [];
+    menus = data.menus || [];
+
+    const menu_sel = document.getElementById('menu_sel');
+    menu_sel.innerHTML = menus.map(s=>`<option value="${s.menu_code}">${s.menu_name}</option>`).join('');
+
+    const tbody = document.querySelector("#item_table tbody");
+    tbody.innerHTML = items.map(x=>`<tr>
+      <td>${x.item_code}</td>
+      <td>${x.item_name}</td>
+      <td>${(menus.find(s=>s.menu_code==x.menu_code)||{}).menu_name||''}</td>
+      <td>
+        <button class="btn-main" onclick="edit('${x.item_code}')">Edit</button>
+        <button class="btn-reset" onclick="delItem('${x.item_code}')">Delete</button>
+      </td>
+    </tr>`).join('');
+  });
+}
+
+function addOrUpdateItem() {
+  const body = {
+    item_code: document.getElementById('item_code').value.trim(),
+    menu_code: document.getElementById('menu_sel').value,
+    item_name: document.getElementById('item_name').value.trim()
+  };
+  const url = edit_code ? "/api/item_master/update" : "/api/item_master/add";
+  if (edit_code) body.item_code = edit_code;
+
+  fetch(url, {
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).then(()=>{
+    edit_code=null;
+    load();
+    resetForm();
+  });
+}
+
+function edit(code) {
+  const x = items.find(s=>s.item_code==code);
+  if (!x) return;
+  document.getElementById('item_code').value = x.item_code;
+  document.getElementById('item_code').readOnly = true;
+  document.getElementById('item_name').value = x.item_name;
+  document.getElementById('menu_sel').value = x.menu_code;
+  edit_code = x.item_code;
+}
+
+function delItem(code) {
+  if (!confirm("Delete this item?")) return;
+  fetch("/api/item_master/delete", {
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({item_code: code})
+  }).then(()=>load());
+}
+
+function resetForm() {
+  document.getElementById('item-form').reset();
+  document.getElementById('item_code').readOnly = false;
+  edit_code = null;
+}
+
+window.onload = load;
+</script>
+{% endblock %}

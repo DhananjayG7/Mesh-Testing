@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Shift Master{% endblock %}
+
+{% block page_css %}
+body { background: #f9f6ef; font-family: 'Segoe UI', Arial, sans-serif; }
+.header { display:flex; align-items:center; justify-content:space-between; padding: 18px 32px 0 32px; }
+.logo-main { height: 44px; }
+.logo-right { height: 34px; }
+.container { max-width:560px; margin:40px auto; background:#fff; border-radius:18px; box-shadow:0 4px 24px #20508122; padding:38px 36px 32px 36px;}
+h2 { color:#205081; font-weight:700; margin-bottom:28px; letter-spacing:0.5px;}
+form label {display:inline-block; width:100px; margin-bottom:8px; color:#205081; font-weight:600;}
+form input[type="text"], form input[type="time"] {width: calc(100% - 110px); margin-bottom:13px; padding:7px 12px; border-radius:8px; border:1px solid #d0dbed;}
+form { display: flex; flex-wrap: wrap; align-items:center; margin-bottom:22px;}
+form label, form input, form button { margin-right:10px;}
+form button { min-width:85px;}
+.btn-main { background:#205081; color:#fff; border:none; border-radius:8px; font-weight:600; padding:9px 18px; margin-right:8px; cursor:pointer; transition:background .16s;}
+.btn-main:hover { background:#ffa500; color:#fff;}
+.btn-reset { background:#e3e6f0; color:#205081; border:none; border-radius:8px; font-weight:600; padding:9px 16px; cursor:pointer;}
+table { width:100%; margin-top:10px; border-collapse:collapse; }
+th,td { padding:9px 11px; border-bottom:1.5px solid #f0f0f0; text-align:center;}
+th { background:#f4f8fb; color:#205081;}
+td button { margin: 0 4px; }
+@media (max-width:600px){
+  .container {padding: 18px 5vw;}
+  form label, form input {width:100%;}
+}
+{% endblock %}
+
+{% block body %}
+<div class="header">
+  <button class="btn btn-main" onclick="location.href='/menu'"><i class="fa fa-arrow-left"></i></button>
+  <img src="/static/img/logo_company.png" class="logo-main" alt="Logo">
+  <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+</div>
+
+<div class="container">
+  <h2>Shift Master</h2>
+  <form onsubmit="return false;" id="shift-form">
+    <label>Shift Code</label>
+    <input id="shift_code" type="text" inputmode="latin" required maxlength="12">
+
+    <label>Name</label>
+    <input id="shift_name" type="text" required>
+
+    <label>From</label>
+    <input id="from_time" type="time" inputmode="numeric" required>
+
+    <label>To</label>
+    <input id="to_time" type="time" inputmode="numeric" required>
+
+    <button class="btn-main" onclick="addOrUpdateShift()">Save</button>
+    <button class="btn-reset" onclick="resetForm()" type="button">Reset</button>
+  </form>
+
+  <table id="shift_table">
+    <thead><tr><th>Code</th><th>Name</th><th>From</th><th>To</th><th>Action</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let shifts=[],edit_code=null;
+
+function load() {
+  fetch('/api/shift_master/list')
+    .then(r=>r.json())
+    .then(data=>{
+      shifts = data.shifts || [];
+      const tbody = document.querySelector("#shift_table tbody");
+      tbody.innerHTML = shifts.map(x=>`<tr>
+        <td>${x.shift_code}</td>
+        <td>${x.shift_name}</td>
+        <td>${x.from_time}</td>
+        <td>${x.to_time}</td>
+        <td>
+          <button class="btn-main" onclick="edit('${x.shift_code}')">Edit</button>
+          <button class="btn-reset" onclick="delShift('${x.shift_code}')">Delete</button>
+        </td>
+      </tr>`).join('');
+    });
+}
+
+function addOrUpdateShift() {
+  const body = {
+    shift_code: document.getElementById('shift_code').value.trim(),
+    shift_name: document.getElementById('shift_name').value.trim(),
+    from_time: document.getElementById('from_time').value,
+    to_time: document.getElementById('to_time').value
+  };
+  const url = edit_code ? "/api/shift_master/update" : "/api/shift_master/add";
+  if (edit_code) body.shift_code = edit_code;
+
+  fetch(url, {
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  }).then(()=>{
+    edit_code=null;
+    load();
+    resetForm();
+  });
+}
+
+function edit(code) {
+  const x = shifts.find(s=>s.shift_code==code);
+  if (!x) return;
+  document.getElementById('shift_code').value = x.shift_code;
+  document.getElementById('shift_code').readOnly = true;
+  document.getElementById('shift_name').value = x.shift_name;
+  document.getElementById('from_time').value = x.from_time;
+  document.getElementById('to_time').value = x.to_time;
+  edit_code = x.shift_code;
+}
+
+function delShift(code) {
+  if (!confirm("Delete this shift?")) return;
+  fetch("/api/shift_master/delete", {
+    method:"POST",
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({shift_code: code})
+  }).then(()=>load());
+}
+
+function resetForm() {
+  document.getElementById('shift-form').reset();
+  document.getElementById('shift_code').readOnly = false;
+  edit_code = null;
+}
+
+window.onload = load;
+</script>
+{% endblock %}

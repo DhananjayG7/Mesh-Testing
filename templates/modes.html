@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Modes</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { background:#f9f6ef; margin:0; font-family: sans-serif; }
+    .header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0 38px; min-height:60px; box-sizing:border-box;
+    }
+    .logo-main { height:44px; display:block; }
+    .logo-right { height:34px; display:block; }
+    .menu-back-btn { background:#eee; color:#205081; padding:9px 18px; font-size:1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background .16s; min-width:92px; margin-right:12px;}
+    .menu-back-btn:hover { background:#ffa500; color:#fff; }
+
+    .container {
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,0.10);
+      max-width: 780px; margin: 46px auto 24px auto; padding: 26px 28px 26px 28px;
+    }
+    h2 { color:#205081; text-align:center; margin: 0 0 18px 0; }
+
+    .section {
+      border:1px solid #eef1f6; border-radius:14px; padding:16px 16px 8px 16px; margin:16px 0;
+    }
+    .section h3 { margin:0 0 10px 0; color:#205081; }
+    .row {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px 6px; border-bottom:1px dashed #eef1f6;
+    }
+    .row:last-child { border-bottom:none; }
+    .lbl { font-weight:700; color:#1f3b63; }
+    .sub { color:#6b7890; font-size:.95rem; margin-top:4px; }
+    .left { display:flex; flex-direction:column; }
+
+    .btnbar { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
+    .btn {
+      padding:10px 18px; font-size:1rem; font-weight:700; border:none; border-radius:8px; cursor:pointer;
+    }
+    .btn.primary { background:#ffa500; color:#fff; }
+    .btn.primary:hover { background:#ff7c00; }
+    .btn.ghost { background:#eee; color:#205081; }
+    .btn.ghost:hover { background:#e6e6e6; }
+
+    /* Switch */
+    .switch { position: relative; display:inline-block; width:54px; height:30px; }
+    .switch input { display:none; }
+    .slider {
+      position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0;
+      background:#cfd6e2; transition:.2s; border-radius:30px;
+    }
+    .slider:before {
+      position:absolute; content:""; height:22px; width:22px; left:4px; bottom:4px;
+      background:white; transition:.2s; border-radius:50%;
+      box-shadow:0 2px 6px rgba(0,0,0,.18);
+    }
+    input:checked + .slider { background:#24b300; }
+    input:checked + .slider:before { transform: translateX(24px); }
+
+    /* Toast */
+    .toast {
+      position: fixed; left:50%; transform:translateX(-50%);
+      bottom: 26px; background:#205081; color:#fff; padding:10px 16px;
+      border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.18);
+      display:none; z-index:9999; font-weight:700;
+    }
+    .toast.ok { background:#24b300; }
+    .toast.err { background:#e2472f; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <div class="container">
+    <h2>Modes</h2>
+
+    <!-- CONNECTIVITY -->
+    <div class="section">
+      <h3><i class="fa fa-wifi"></i> Connectivity</h3>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">Wi-Fi</div>
+          <div class="sub">Show Wi-Fi related status/controls in UI.</div>
+        </div>
+        <label class="switch">
+          <input id="conn_wifi" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">Mesh Network</div>
+          <div class="sub">Show Mesh status/cards in UI.</div>
+        </div>
+        <label class="switch">
+          <input id="conn_mesh" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">PostgreSQL</div>
+          <div class="sub">Surface PG connection status (events still queue offline).</div>
+        </div>
+        <label class="switch">
+          <input id="conn_postgres" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- AUTHENTICATION -->
+    <div class="section">
+      <h3><i class="fa fa-lock"></i> Authentication</h3>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">Face</div>
+          <div class="sub">Enable camera/face login option.</div>
+        </div>
+        <label class="switch">
+          <input id="auth_face" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">Fingerprint</div>
+          <div class="sub">Enable fingerprint login option.</div>
+        </div>
+        <label class="switch">
+          <input id="auth_finger" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="left">
+          <div class="lbl">RFID</div>
+          <div class="sub">Enable RFID card/tag login option.</div>
+        </div>
+        <label class="switch">
+          <input id="auth_rfid" type="checkbox"><span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="btnbar">
+        <button class="btn ghost" onclick="loadModes()">Reset</button>
+        <button class="btn primary" onclick="saveModes()"><i class="fa fa-save"></i> Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">Saved</div>
+
+  <script>
+    let currentModes = {};
+
+    function toast(msg, type="ok"){
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.className = 'toast ' + (type === 'ok' ? 'ok' : (type === 'err' ? 'err' : ''));
+      t.style.display = 'block';
+      setTimeout(()=> t.style.display = 'none', 1100);
+    }
+
+    async function loadModes(){
+      try {
+        const r = await fetch('/api/modes_get');
+        const m = await r.json();
+        currentModes = m || {};
+
+        for (const id of ["conn_wifi","conn_mesh","conn_postgres","auth_face","auth_finger","auth_rfid"]) {
+          const el = document.getElementById(id);
+          if (el) el.checked = !!currentModes[id];
+        }
+      } catch (e) {
+        toast('Failed to load', 'err');
+        console.warn(e);
+      }
+    }
+
+    async function saveModes(){
+      const payload = {};
+      for (const id of ["conn_wifi","conn_mesh","conn_postgres","auth_face","auth_finger","auth_rfid"]) {
+        const el = document.getElementById(id);
+        if (el) payload[id] = !!el.checked;
+      }
+      try {
+        const r = await fetch('/api/modes_set', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if (j && j.success) {
+          toast('Saved', 'ok');
+        } else {
+          toast('Save failed', 'err');
+        }
+      } catch (e) {
+        toast('Save failed', 'err');
+        console.warn(e);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadModes);
+  </script>
+</body>
+</html>

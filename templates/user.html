@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>User Login</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    :root{ --hdrH:72px; }
+    body{ background:#f9f6ef; margin:0; font-family:sans-serif; }
+
+    /* Header */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0 38px; min-height:var(--hdrH); box-sizing:border-box;
+    }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:34px; display:block; }
+    .menu-back-btn{ background:#eee; color:#205081; padding:9px 18px; font-size:1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background .16s; min-width:92px; margin-right:12px; }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+    /* Stage (centered frame) */
+    .stage{
+      position:fixed; left:0; right:0; top:var(--hdrH); bottom:0;
+      display:flex; align-items:center; justify-content:center;
+      padding:18px; box-sizing:border-box;
+      z-index: 1; /* keep below banner */
+    }
+
+    /* Mode panels (Face > Finger > RFID) */
+    .panel{ display:none; width:100%; height:100%; }
+    .panel.show{ display:flex; align-items:center; justify-content:center; }
+
+    /* Shared frame (camera or icon goes inside) */
+    .live-card{
+      position:relative;
+      width:min(520px, 96vw);
+      aspect-ratio: 3/4;
+      border-radius:16px; overflow:hidden;
+      background:#000;
+      box-shadow: 0 10px 28px rgba(32,80,129,.18);
+      border:4px solid #eef2f7;
+      display:flex; align-items:center; justify-content:center;
+    }
+
+    /* Camera feed when Face mode is on */
+    #live-video{
+      position:absolute; inset:0;
+      width:100%; height:100%; object-fit:cover; display:block;
+    }
+
+    /* Icon “feed” used for Finger/RFID modes (looks like a feed tile) */
+    .icon-feed{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(ellipse at center, #1e2a3a 0%, #0b1119 100%);
+      color:#ffa500;
+    }
+    .icon-feed .icon-circle{
+      width:120px; height:120px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      background:#f4f7fb; border:6px solid #eee; box-shadow:0 8px 26px rgba(0,0,0,.25);
+      color:#ffa500; font-size:3rem;
+    }
+    .icon-feed .label{
+      position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      color:#d6e1f2; font-weight:700; font-size:1rem; letter-spacing:.2px;
+      background:rgba(0,0,0,.25); padding:6px 10px; border-radius:10px;
+      backdrop-filter: blur(1px);
+    }
+
+    /* Tiny scan overlays */
+    .stream-modal-bg{
+      display:none; position:absolute; inset:0; z-index:10;
+      background:rgba(38,62,94,.12); justify-content:center; align-items:center;
+    }
+    .stream-modal-box{ background:#fff; border-radius:16px; box-shadow:0 4px 22px #20508125; padding:18px 16px; text-align:center; }
+    .stream-modal-box img#face-video-img{
+      width:min(360px, 82vw); height:auto; max-height:60vh;
+      border-radius:12px; border:4px solid #eee; background:#e5e5e5; object-fit:cover;
+    }
+
+    /* ==== FULL-WIDTH BOTTOM POPUP (30% screen height) ==== */
+    .banner{
+      position:fixed; left:0; right:0; bottom:0;
+      height:30vh; min-height:180px; max-height:360px;
+      background: transparent;
+      transform: translateY(110%);
+      transition: transform .06s ease-out; /* near-instant */
+      z-index: 9999;                      /* above stage */
+      display:flex; align-items:center; justify-content:center;
+      pointer-events:none;                /* non-blocking */
+      padding: 10px;
+      will-change: transform;
+    }
+    .banner.show{ transform: translateY(0); }
+
+    .banner-card{
+      width:min(1100px, 96vw);
+      background: rgba(255,255,255,0.98);
+      border-radius:18px; box-shadow:0 10px 28px rgba(0,0,0,0.25);
+      display:flex; align-items:center; gap:16px; padding:14px 16px;
+      pointer-events:auto;
+    }
+    .banner .avatar{
+      width:72px; height:72px; border-radius:50%; overflow:hidden; border:4px solid #eef2f7; background:#f2f2f2;
+      display:flex; align-items:center; justify-content:center; flex:0 0 72px;
+    }
+    .banner .avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .banner .avatar.fail{ background:#ffebee; border-color:#ffd6db; color:#b02a37; font-size:34px; }
+
+    .banner .ok{ color:#157347; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .fail{ color:#b02a37; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .sub{ color:#205081; white-space:pre-line; font-size:1rem; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <!-- Stage -->
+  <div class="stage">
+    <!-- FACE mode -->
+    <div class="panel" id="panel-face">
+      <div class="live-card">
+        <img id="live-video" src="/video_feed" alt="Live camera">
+
+        <!-- minimal in-card overlay for scanning (optional) -->
+        <div class="stream-modal-bg" id="face-modal">
+          <div class="stream-modal-box">
+            <h4 class="title">Align your face</h4>
+            <img id="face-video-img" src="/video_feed" alt="camera">
+            <div class="hint">Scanning…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FINGER mode -->
+    <div class="panel" id="panel-finger">
+      <div class="live-card">
+        <div class="icon-feed">
+          <div class="icon-circle"><i class="fa fa-fingerprint"></i></div>
+          <div class="label">Fingerprint Login</div>
+        </div>
+        <div class="stream-modal-bg" id="finger-modal">
+          <div class="stream-modal-box">
+            <div class="big-icon"><i class="fa fa-fingerprint"></i></div>
+            <div class="title">Fingerprint</div>
+            <div class="hint">Recognizing…</div>
+            <div id="finger-status" class="muted">Ready…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RFID mode -->
+    <div class="panel" id="panel-rfid">
+      <div class="live-card">
+        <div class="icon-feed">
+          <div class="icon-circle"><i class="fa fa-id-card"></i></div>
+          <div class="label">RFID Login</div>
+        </div>
+        <div class="stream-modal-bg" id="rfid-modal">
+          <div class="stream-modal-box">
+            <div class="big-icon"><i class="fa fa-id-card"></i></div>
+            <div class="title">RFID</div>
+            <div class="hint">Reading card…</div>
+            <div id="rfid-status" class="muted">Ready…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FULL-WIDTH 30% HEIGHT POPUP (no bluish overlay) -->
+  <div class="banner" id="banner" aria-live="polite" aria-atomic="true">
+    <div class="banner-card">
+      <div class="avatar" id="banner-avatar"></div>
+      <div class="lines">
+        <div class="ok"   id="banner-title-ok"   style="display:none;">Successfully verified</div>
+        <div class="fail" id="banner-title-fail" style="display:none;">Not identified</div>
+        <div class="sub"  id="banner-sub"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ===== Tunables ===== */
+const RFID_POLL_MS = 500;        // <-- hard limit: poll once each 500ms
+const RFID_FETCH_TIMEOUT = 600;  // request times out a bit above poll cadence
+const DEBOUNCE_SAME_CARD_MS = 1500; // suppress repeats from the same card
+const HOLD_MS_FAIL = 1000;       // fail banner auto-hide
+const PRES_WINDOW_MS = 1000;     // presence window for each modality
+const TY_POLL_MS = 150;          // thank-you event poll
+const TY_SUPPRESS_MS = 2000;     // suppress duplicate thank-you for same user
+
+/* ===== Tiny helpers ===== */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+async function fastFetch(url, opts = {}, timeoutMs = 1800) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal, cache:'no-store' });
+    return await res.json();
+  } finally { clearTimeout(id); }
+}
+
+/* ===== Modes ===== */
+let MODES = { auth_face:true, auth_finger:true, auth_rfid:true };
+
+function renderModePanels(){
+  const faceOn   = !!MODES.auth_face;
+  const fingerOn = !!MODES.auth_finger;
+
+  const showFace   = faceOn;
+  const showFinger = !faceOn && fingerOn;
+  const showRfid   = !faceOn && !fingerOn;
+
+  document.getElementById('panel-face').classList.toggle('show', showFace);
+  document.getElementById('panel-finger').classList.toggle('show', showFinger);
+  document.getElementById('panel-rfid').classList.toggle('show', showRfid);
+}
+async function loadModes(){
+  try { MODES = Object.assign(MODES, await fastFetch('/api/modes_get', {}, 1200) || {}); } catch(_) {}
+  renderModePanels();
+}
+
+/* ===== Banner control (success pinned, fail 1s) ===== */
+let bannerTimer = null;
+let currentUserId = null;
+let currentUserName = '';
+let bannerVisible = false;
+const bannerState = { key: 0, kind: null }; // "success" | "fail" | null
+
+function hideBannerNow(force=false){
+  const banner = document.getElementById('banner');
+  if (!force && bannerState.kind === 'success' && currentUserId) return; // keep success pinned
+  banner.classList.remove('show');
+  bannerVisible = false;
+  if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+}
+
+function showBannerCore({success, img, emp_id, name, autoHide}){
+  const banner = document.getElementById('banner');
+  const avatar = document.getElementById('banner-avatar');
+  const ok = document.getElementById('banner-title-ok');
+  const fail = document.getElementById('banner-title-fail');
+  const sub = document.getElementById('banner-sub');
+
+  bannerState.key += 1;
+  bannerState.kind = success ? 'success' : 'fail';
+  banner.dataset.key = String(bannerState.key);
+
+  if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+
+  avatar.className = 'avatar' + (success ? '' : ' fail');
+  avatar.innerHTML = '';
+  if (success && img){
+    const im = document.createElement('img'); im.src = img; avatar.appendChild(im);
+  } else if (!success){
+    avatar.innerHTML = '<i class="fa fa-times"></i>';
+  }
+
+  ok.style.display = success ? 'block' : 'none';
+  fail.style.display = success ? 'none' : 'block';
+
+  const lines = [];
+  if (emp_id) lines.push(`Emp ID: ${emp_id}`);
+  if (name)   lines.push(`Name: ${name}`);
+  document.getElementById('banner-sub').innerText = lines.join('\n');
+
+  // trigger animation
+  // eslint-disable-next-line no-unused-expressions
+  banner.offsetHeight;
+  banner.classList.add('show');
+  bannerVisible = true;
+
+  if (autoHide){
+    bannerTimer = setTimeout(() => {
+      banner.classList.remove('show');
+      bannerVisible = false;
+    }, HOLD_MS_FAIL);
+  }
+}
+
+function showSuccessPinned({emp_id, name, img}){
+  currentUserId = emp_id || currentUserId;
+  currentUserName = name || currentUserName;
+  showBannerCore({ success:true, img:img||null, emp_id: currentUserId, name: currentUserName, autoHide:false });
+}
+function showFailOnce(){
+  if (currentUserId) return; // don't spam fail if someone is pinned
+  showBannerCore({ success:false, img:null, emp_id:'', name:'', autoHide:true });
+}
+
+/* ===== Normalizers & classifiers ===== */
+function normalizeId(data){
+  if (!data || typeof data !== 'object') return null;
+  const possible = [data.user_id, data.employee_id, data.emp_id, data.id, data.userId, data.empId, data.card_uid];
+  for (const v of possible){
+    if (v === 0) return '0';
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return null;
+}
+function normalizeName(data){
+  if (!data || typeof data !== 'object') return '';
+  return (data.name || data.username || data.emp_name || '').toString();
+}
+function detectsThankYou(data){
+  const txt = [
+    data && data.message,
+    data && data.reason,
+    data && data.code,
+    data && data.audio,
+    data && data.status
+  ].filter(Boolean).join(' ').toLowerCase();
+  const cues = ['thankyou','thank you','granted','access_granted','access granted','accepted','welcome'];
+  return cues.some(c => txt.includes(c));
+}
+function isExplicitFail(data){
+  if (!data || typeof data !== 'object') return false;
+  if (data.success === false) return true;
+  const txt = [data.message, data.reason, data.code, data.status].filter(Boolean).join(' ').toLowerCase();
+  const negatives = ['not identified','denied','rejected','no match','mismatch','failed','fail','unknown_face','unknown face','fingerprint not recognized'];
+  return negatives.some(n => txt.includes(n));
+}
+function isIdle(data){
+  if (!data || typeof data !== 'object') return true;
+  const txt = [data.message, data.reason, data.code].filter(Boolean).join(' ').toLowerCase();
+  const idleHints = ['no finger','no_finger','no card','no_card','no tag','no_tag','timeout','time out','idle','waiting','place your finger','scan rfid','no_face','no face'];
+  return idleHints.some(h => txt.includes(h));
+}
+function isSuccess(data){
+  if (data && data.success === true) return true;
+  if (detectsThankYou(data)) return true;
+  return normalizeId(data) !== null;
+}
+
+/* ===== Presence tracking ===== */
+let lastFaceTS = 0, lastFingerTS = 0, lastRfidTS = 0;
+const recentFace   = () => (Date.now() - lastFaceTS)   <= PRES_WINDOW_MS;
+const recentFinger = () => (Date.now() - lastFingerTS) <= PRES_WINDOW_MS;
+const recentRfid   = () => (Date.now() - lastRfidTS)   <= PRES_WINDOW_MS;
+const recentAny    = () => recentFace() || recentFinger() || recentRfid();
+
+function quiesceIfNoPresence(){
+  if (currentUserId && !recentAny()){
+    currentUserId = null;
+    currentUserName = '';
+    bannerState.kind = null;
+    hideBannerNow(true);
+  }
+}
+
+/* ===== Success display (with safe avatar hydrate) ===== */
+async function showIdentified(data){
+  const id = normalizeId(data);
+  const name = normalizeName(data);
+
+  if (id && currentUserId && id === currentUserId && bannerVisible && bannerState.kind === 'success'){
+    return; // already pinned, no re-render
+  }
+
+  currentUserId = id || currentUserId;
+  currentUserName = name || currentUserName;
+  showSuccessPinned({ emp_id: currentUserId, name: currentUserName, img:null });
+
+  // try to hydrate avatar (non-blocking)
+  const myKey = bannerState.key;
+  try{
+    if (id){
+      const u = await fastFetch('/api/get_user_image', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ emp_id:id })
+      }, 1500);
+      const url = u && (u.image || u.photo || u.face_image);
+      if (!url) return;
+      if (bannerState.key !== myKey || bannerState.kind !== 'success' || id !== currentUserId) return;
+
+      const avatar = document.getElementById('banner-avatar');
+      avatar.className = 'avatar';
+      avatar.innerHTML = '';
+      const im = document.createElement('img'); im.src = url; avatar.appendChild(im);
+    }
+  }catch(_){ /* ignore */ }
+}
+
+/* ===== Thank-you watcher (de-queued & de-duped) ===== */
+let TY_lastSeq = 0;
+let lastTYEmp = null, lastTYAt = 0;
+
+async function tyFetchSince(seq){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 600);
+  try{
+    const r = await fetch(`/api/thankyou_events?since=${seq}`, { cache:'no-store', signal: ctrl.signal });
+    return await r.json();
+  }catch(_){ return null; } finally { clearTimeout(t); }
+}
+
+async function tyLoop(){
+  quiesceIfNoPresence();
+  const res = await tyFetchSince(TY_lastSeq);
+  if (!res) return;
+
+  // Always advance to latest to drop any backlog
+  if (typeof res.latest_seq === 'number') {
+    TY_lastSeq = Math.max(TY_lastSeq, res.latest_seq);
+  }
+
+  // No presence? Ignore events entirely.
+  if (!recentAny()) return;
+
+  // Collapse queue: only act on the newest event if present
+  if (Array.isArray(res.events) && res.events.length){
+    const ev = res.events[res.events.length - 1]; // newest only
+    const emp = ev && (ev.emp_id || ev.user_id || ev.id);
+    const now = Date.now();
+
+    // Suppress duplicates for same user within window
+    if (emp && (emp === lastTYEmp) && (now - lastTYAt) < TY_SUPPRESS_MS) return;
+
+    lastTYEmp = emp || null;
+    lastTYAt = now;
+    await showIdentified({ user_id: ev.emp_id, name: ev.name });
+  }
+}
+
+/* ===== Face & Finger loops (unchanged cadence) ===== */
+let faceLoopActive=false, _faceInFlight=false;
+async function faceLoop(){
+  if (faceLoopActive) return; faceLoopActive = true;
+
+  // Hidden probe image to grab stills
+  let probeImg = document.getElementById('face-video-img');
+  if (!probeImg){
+    probeImg = document.createElement('img');
+    probeImg.id = 'face-video-img';
+    probeImg.src = '/video_feed';
+    probeImg.style.position='absolute';
+    probeImg.style.left='-9999px';
+    document.body.appendChild(probeImg);
+  }
+
+  const canvas = document.createElement('canvas'); canvas.width=224; canvas.height=168;
+  const ctx = canvas.getContext('2d', { willReadFrequently:true });
+
+  while (faceLoopActive){
+    if (!MODES.auth_face){ await sleep(140); continue; }
+    if (!probeImg.complete || probeImg.naturalWidth===0){ await sleep(80); continue; }
+    if (_faceInFlight){ await sleep(20); continue; }
+    _faceInFlight = true;
+
+    try{
+      ctx.drawImage(probeImg, 0, 0, canvas.width, canvas.height);
+      const imgBase64 = canvas.toDataURL('image/jpeg', 0.5);
+      const data = await fastFetch('/api/face_login', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ image: imgBase64 })
+      }, 2000);
+
+      if (!isIdle(data)) { lastFaceTS = Date.now(); }
+
+      if (isIdle(data)){
+        // no face
+      } else if (isExplicitFail(data)){
+        if (!currentUserId) showFailOnce();
+      } else if (isSuccess(data)){
+        // success arrives via thank-you watcher
+      }
+    }catch(_){ /* ignore */ } finally { _faceInFlight=false; }
+
+    await sleep(70);
+  }
+}
+
+let fingerLoopActive=false, _fingerInFlight=false;
+async function fingerLoop(){
+  if (fingerLoopActive) return; fingerLoopActive = true;
+
+  while (fingerLoopActive){
+    if (!MODES.auth_finger){ await sleep(140); continue; }
+    if (_fingerInFlight){ await sleep(20); continue; }
+    _fingerInFlight = true;
+
+    try{
+      const data = await fastFetch('/api/finger_identify', { method:'POST' }, 2200);
+
+      if (!isIdle(data)) { lastFingerTS = Date.now(); }
+
+      if (isIdle(data)){
+        await sleep(90);
+      } else if (isExplicitFail(data)){
+        if (!currentUserId) showFailOnce();
+      } else if (isSuccess(data)){
+        // handled by thank-you watcher
+      }
+    }catch(_){ await sleep(120); } finally { _fingerInFlight=false; }
+  }
+}
+
+/* ===== RFID loop (500ms, no queue, edge-triggered) ===== */
+let rfidLoopActive=false, _rfidInFlight=false;
+let lastRfidVal = null, lastRfidAt = 0;
+
+async function rfidLoop(){
+  if (rfidLoopActive) return; rfidLoopActive = true;
+
+  while (rfidLoopActive){
+    if (!MODES.auth_rfid){ await sleep(RFID_POLL_MS); continue; }
+    if (_rfidInFlight){ await sleep(10); continue; }
+    _rfidInFlight = true;
+
+    try{
+      // Hard timeout slightly < poll spacing to avoid piling up
+      const data = await fastFetch('/api/rfid_login', { method:'POST' }, RFID_FETCH_TIMEOUT);
+
+      if (!isIdle(data)) { lastRfidTS = Date.now(); }
+
+      if (isIdle(data)){
+        // Card removed or idle: clear edge after debounce window
+        if ((Date.now() - lastRfidAt) > DEBOUNCE_SAME_CARD_MS) {
+          lastRfidVal = null;
+        }
+      } else if (isExplicitFail(data)){
+        if (!currentUserId) showFailOnce();
+      } else if (isSuccess(data)){
+        // Edge-trigger: only fire when a NEW id appears or debounce window elapsed
+        const id = normalizeId(data);
+        const now = Date.now();
+        if (id && (id !== lastRfidVal || (now - lastRfidAt) > DEBOUNCE_SAME_CARD_MS)) {
+          lastRfidVal = id;
+          lastRfidAt = now;
+
+          // Show success instantly (don’t rely on any queued events)
+          await showIdentified({ user_id: id, name: normalizeName(data) });
+        }
+      }
+    }catch(_){
+      // ignore fetch timeouts/abort
+    } finally { _rfidInFlight=false; }
+
+    // Fixed cadence: exactly one attempt per 500ms
+    await sleep(RFID_POLL_MS);
+  }
+}
+
+/* ===== Boot ===== */
+document.addEventListener('DOMContentLoaded', async ()=>{
+  await loadModes();
+
+  // Start loops
+  faceLoop(); fingerLoop(); rfidLoop();
+
+  // Thank-you watcher: collapsed & deduped
+  setInterval(tyLoop, TY_POLL_MS);
+
+  // Presence-based quiesce
+  setInterval(quiesceIfNoPresence, 150);
+});
+</script>
+
+</body>
+</html>

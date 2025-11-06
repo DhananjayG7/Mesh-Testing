@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Admin Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Optional: remove if you don't have these -->
+  <link rel="stylesheet" href="/static/css/vendors/simple-keyboard.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"/>
+
+  <style>
+    :root{ --hdrH:72px; }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:#f9f6ef; color:#1f2d3d; }
+
+    /* Header */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0 38px; min-height:var(--hdrH);
+    }
+    .menu-back-btn{ background:#eee; color:#205081; padding:9px 18px; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background .16s; min-width:92px; }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:34px; display:block; }
+
+    /* Stage */
+    .stage{
+      position:fixed; inset:auto 0 0 0; top:var(--hdrH);
+      display:flex; align-items:center; justify-content:center;
+      padding:18px;
+    }
+    .card{
+      width:min(600px, 96vw);
+      border-radius:16px; overflow:hidden;
+      background:#fff; box-shadow:0 10px 28px rgba(32,80,129,.18);
+      border:4px solid #eef2f7;
+    }
+
+    /* Tabs */
+    .tabs{ display:flex; border-bottom:1px solid #e9edf4; background:#f7f9fc; }
+    .tabs button{
+      flex:1; padding:12px 8px; background:transparent; border:none; font-weight:800; color:#205081; cursor:pointer;
+      border-right:1px solid #e9edf4; letter-spacing:.2px;
+    }
+    .tabs button:last-child{ border-right:none; }
+    .tabs button.active{ background:#fff; color:#ff7c00; }
+    .tab-keys{ font-size:.86rem; color:#667a94; padding:6px 12px 10px; text-align:right; }
+
+    /* Panels */
+    .panel{ display:none; padding:16px; }
+    .panel.show{ display:block; }
+
+    /* Face */
+    .live-box{ position:relative; width:100%; aspect-ratio:3/4; background:#000; border-radius:12px; overflow:hidden; }
+    #live-video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    #face-canvas{ position:absolute; inset:0; }
+    .hint{ text-align:center; color:#205081; font-weight:700; margin-top:10px; min-height:24px; }
+
+    /* Fingerprint / RFID visuals */
+    .icon-feed{
+      position:relative; width:100%; aspect-ratio:3/4;
+      display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(ellipse at center, #1e2a3a 0%, #0b1119 100%);
+      color:#ffa500; border-radius:12px;
+    }
+    .icon-circle{
+      width:120px; height:120px; border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      background:#f4f7fb; border:6px solid #eee; box-shadow:0 8px 26px rgba(0,0,0,.25);
+      color:#ffa500; font-size:3rem;
+    }
+    .icon-label{
+      position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+      color:#d6e1f2; font-weight:700; font-size:1rem; letter-spacing:.2px;
+      background:rgba(0,0,0,.25); padding:6px 10px; border-radius:10px; backdrop-filter: blur(1px);
+    }
+
+    /* Password */
+    .pw-box{ display:flex; flex-direction:column; align-items:center; gap:14px; padding:20px 12px; }
+    #adminPw{ padding:12px; font-size:1rem; border:1px solid #ccc; border-radius:8px; width:80%; }
+    #pwBtn{
+      padding:12px 20px; font-size:1rem; font-weight:700;
+      border:none; border-radius:8px; background:#ffa500; color:#fff; cursor:pointer;
+    }
+    #pwBtn:hover{ background:#ff7c00; }
+    .result{ margin-top:6px; font-weight:700; text-align:center; min-height:22px; }
+
+    /* Banner popup */
+    .banner{
+      position:fixed; left:0; right:0; bottom:0;
+      height:30vh; min-height:180px; max-height:360px;
+      transform: translateY(110%);
+      transition: transform .06s ease-out;
+      z-index: 9999; display:flex; align-items:center; justify-content:center; pointer-events:none; padding:10px;
+    }
+    .banner.show{ transform: translateY(0); }
+    .banner-card{
+      width:min(1100px, 96vw);
+      background: rgba(255,255,255,0.98);
+      border-radius:18px; box-shadow:0 10px 28px rgba(0,0,0,0.25);
+      display:flex; align-items:center; gap:16px; padding:14px 16px; pointer-events:auto;
+    }
+    .banner .avatar{ width:72px; height:72px; border-radius:50%; overflow:hidden; border:4px solid #eef2f7; background:#f2f2f2; display:flex; align-items:center; justify-content:center; flex:0 0 72px; }
+    .banner .avatar img{ width:100%; height:100%; object-fit:cover; }
+    .banner .avatar.fail{ background:#ffebee; border-color:#ffd6db; color:#b02a37; font-size:34px; }
+    .banner .ok{ color:#157347; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .fail{ color:#b02a37; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .sub{ color:#205081; white-space:pre-line; font-size:1rem; }
+
+    .top-actions{ position:absolute; right:10px; top:10px; display:flex; gap:8px; }
+    .ghost{ background:transparent; color:#667a94; border:1px dashed #cfd8e3; padding:6px 10px; border-radius:8px; cursor:pointer; }
+    .ghost:hover{ color:#205081; border-color:#20508155; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Company">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <!-- Stage -->
+  <div class="stage">
+    <div class="card">
+      <div class="top-actions">
+        <button class="ghost" onclick="forcePassword()">Password</button>
+        <button class="ghost" onclick="adminLogout()">Logout</button>
+      </div>
+
+      <div class="tabs">
+        <button id="tab-face" class="active" onclick="showPanel('face')" title="1">Face</button>
+        <button id="tab-finger" onclick="showPanel('finger')" title="2">Fingerprint</button>
+        <button id="tab-rfid" onclick="showPanel('rfid')" title="3">RFID</button>
+        <button id="tab-password" onclick="showPanel('password')" title="4">Password</button>
+      </div>
+      <div class="tab-keys">Shortcuts: <b>1</b>=Face · <b>2</b>=Fingerprint · <b>3</b>=RFID · <b>4</b>=Password</div>
+
+      <!-- FACE -->
+      <div id="panel-face" class="panel show">
+        <div class="live-box">
+          <img id="live-video" src="/video_feed" alt="Live camera">
+          <canvas id="face-canvas"></canvas>
+        </div>
+        <div class="hint" id="face-hint">Center face in the box…</div>
+      </div>
+
+      <!-- FINGERPRINT -->
+      <div id="panel-finger" class="panel">
+        <div class="icon-feed">
+          <div class="icon-circle"><i class="fa fa-fingerprint"></i></div>
+          <div class="icon-label">Fingerprint Login</div>
+        </div>
+        <div class="hint" id="finger-hint">Place finger on sensor…</div>
+      </div>
+
+      <!-- RFID -->
+      <div id="panel-rfid" class="panel">
+        <div class="icon-feed">
+          <div class="icon-circle"><i class="fa fa-id-card"></i></div>
+          <div class="icon-label">RFID Login</div>
+        </div>
+        <div class="hint" id="rfid-hint">Tap your card on the reader…</div>
+      </div>
+
+      <!-- PASSWORD -->
+      <div id="panel-password" class="panel">
+        <div class="pw-box">
+          <h3 style="color:#205081; margin:0;">Admin Password Login</h3>
+          <input type="password" id="adminPw" placeholder="Enter Admin Password">
+          <button id="pwBtn" onclick="submitAdminPw()">Use Password</button>
+          <div id="pw-result" class="result"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Banner -->
+  <div class="banner" id="banner">
+    <div class="banner-card">
+      <div class="avatar" id="banner-avatar"></div>
+      <div class="lines">
+        <div class="ok" id="banner-title-ok" style="display:none;">Admin verified</div>
+        <div class="fail" id="banner-title-fail" style="display:none;">Access denied</div>
+        <div class="sub" id="banner-sub"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* =========================
+   CONFIG: endpoints & routes
+   ========================= */
+const API_FACE     = "/api/operator_face_verify";   // expects {success, name?, emp_id?, photo_url?, message?}
+const API_FINGER   = "/api/rfid_login"              // CHANGE if you have a separate admin finger verify endpoint
+// const API_FINGER = "/api/operator_finger_verify";
+const API_RFID     = "/api/rfid_login";             // expects {success, name?, emp_id?, photo_url?, message?}
+const API_PASSWORD = "/api/operator_password_login";// expects {success, message?, photo_url?}
+const DEFAULT_NEXT = "/register";
+
+/* ========= Next-destination & session helpers ========= */
+function getNextDest() {
+  try {
+    const p = new URLSearchParams(location.search);
+    const next = p.get('next');
+    return next ? decodeURIComponent(next) : DEFAULT_NEXT;
+  } catch { return DEFAULT_NEXT; }
+}
+function adminVerifiedGo() {
+  try { sessionStorage.setItem('admin_ok', '1'); } catch {}
+  location.replace(getNextDest());
+}
+function adminLogout(){
+  try { sessionStorage.removeItem('admin_ok'); } catch {}
+  location.href = '/menu';
+}
+function forcePassword(){ showPanel('password'); document.getElementById('adminPw').focus(); }
+
+/* Auto-skip adminlogin if already verified */
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    if (sessionStorage.getItem('admin_ok') === '1') {
+      location.replace(getNextDest());
+      return;
+    }
+  } catch {}
+});
+
+/* ========= Utilities ========= */
+function $(id){ return document.getElementById(id); }
+async function postJSON(url, payload){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload||{})});
+  const t = await r.text(); try { return JSON.parse(t); } catch { return {success:false, message:t}; }
+}
+
+/* ========= Tabs/Panels ========= */
+const tabs = { face:$('tab-face'), finger:$('tab-finger'), rfid:$('tab-rfid'), password:$('tab-password') };
+const panels = { face:$('panel-face'), finger:$('panel-finger'), rfid:$('panel-rfid'), password:$('panel-password') };
+
+function activateTab(which){
+  for(const k in tabs){ tabs[k].classList.toggle('active', k===which); }
+}
+function showPanel(which){
+  stopAllLoops();
+  for(const k in panels){ panels[k].classList.toggle('show', k===which); }
+  activateTab(which);
+  if(which==='face') startFaceLoop();
+  if(which==='finger') startFingerLoop();
+  if(which==='rfid') startRfidLoop();
+  if(which==='password') $('adminPw').focus();
+}
+document.addEventListener('keydown', (e)=>{
+  if(e.key==='1') showPanel('face');
+  if(e.key==='2') showPanel('finger');
+  if(e.key==='3') showPanel('rfid');
+  if(e.key==='4') showPanel('password');
+});
+
+/* ========= Banner ========= */
+const banner = $('banner'), bannerAvatar=$('banner-avatar'), okTitle=$('banner-title-ok'), failTitle=$('banner-title-fail'), bannerSub=$('banner-sub');
+
+function showBannerOK(sub, photo){
+  bannerAvatar.className='avatar';
+  bannerAvatar.innerHTML = photo ? `<img src="${photo}">` : `<i class="fa fa-user-check" style="font-size:34px; color:#157347;"></i>`;
+  okTitle.style.display='block'; failTitle.style.display='none';
+  bannerSub.textContent = sub || '';
+  banner.classList.add('show');
+  setTimeout(()=>{ banner.classList.remove('show'); adminVerifiedGo(); }, 800);
+}
+function showBannerFail(sub){
+  bannerAvatar.className='avatar fail';
+  bannerAvatar.innerHTML = `<i class="fa fa-xmark"></i>`;
+  okTitle.style.display='none'; failTitle.style.display='block';
+  bannerSub.textContent = sub || 'Try again.';
+  banner.classList.add('show');
+  setTimeout(()=> banner.classList.remove('show'), 1100);
+}
+
+/* ============ FACE MODE ============ */
+const liveImg = $('live-video');
+const faceCanvas = $('face-canvas');
+const faceCtx = faceCanvas.getContext('2d');
+const faceHint = $('face-hint');
+let faceLoopOn = false, faceSteady = null;
+
+function resizeCanvas(){
+  faceCanvas.width = liveImg.clientWidth || faceCanvas.clientWidth || 300;
+  faceCanvas.height = liveImg.clientHeight || faceCanvas.clientHeight || 400;
+}
+new ResizeObserver(resizeCanvas).observe(liveImg);
+
+function drawFaceBox(good){
+  const w=faceCanvas.width, h=faceCanvas.height;
+  faceCtx.clearRect(0,0,w,h);
+  faceCtx.strokeStyle = good ? "#38b000" : "#aaa";
+  faceCtx.lineWidth = good ? 4 : 2;
+  const boxW = Math.min(w*0.68, h*0.68); const x=(w-boxW)/2, y=(h-boxW)/2;
+  faceCtx.strokeRect(x,y,boxW,boxW);
+}
+
+async function verifyFace(){
+  const c=document.createElement('canvas');
+  const W=liveImg.clientWidth||300, H=liveImg.clientHeight||400;
+  c.width=W; c.height=H;
+  c.getContext('2d').drawImage(liveImg,0,0,W,H);
+  const image=c.toDataURL('image/jpeg',0.92);
+  const res = await postJSON(API_FACE,{ image });
+  if(res && res.success){
+    showBannerOK(`Admin: ${res.name||res.emp_id||'Verified'}`, res.photo_url);
+  }else{
+    faceHint.textContent = (res && res.message) || 'Not recognized. Re-center…';
+    faceSteady=null; // keep looping
+  }
+}
+
+function faceTick(){
+  if(!faceLoopOn) return;
+  resizeCanvas();
+  const ok = true; // framing hint
+  drawFaceBox(ok);
+  if(ok){
+    if(!faceSteady) faceSteady=Date.now();
+    const s=(Date.now()-faceSteady)/1000;
+    if(s>1.2){
+      faceHint.textContent="Verifying…";
+      faceLoopOn=false;
+      verifyFace().finally(()=>{ faceLoopOn=true; faceSteady=null; requestAnimationFrame(faceTick); });
+      return;
+    } else faceHint.textContent=`Hold steady ${(1.2-s).toFixed(1)}s…`;
+  }else{
+    faceSteady=null; faceHint.textContent="Center face in the box…";
+  }
+  requestAnimationFrame(faceTick);
+}
+function startFaceLoop(){ faceLoopOn=true; faceSteady=null; requestAnimationFrame(faceTick); }
+function stopFaceLoop(){ faceLoopOn=false; }
+
+/* ========== FINGERPRINT MODE (fast poll) ========== */
+let fingerTimer=null;
+function startFingerLoop(){
+  $('finger-hint').textContent = 'Place finger on sensor…';
+  const poll = async ()=>{
+    try{
+      const res = await postJSON(API_FINGER, {}); // server returns success when matched as admin
+      if(res && res.success){
+        showBannerOK(`Admin: ${res.name||res.emp_id||'Verified'}`, res.photo_url);
+        stopFingerLoop(); return;
+      }
+    }catch(e){ /* ignore */ }
+    fingerTimer = setTimeout(poll, 220); // snappy polling
+  };
+  poll();
+}
+function stopFingerLoop(){ if(fingerTimer){ clearTimeout(fingerTimer); fingerTimer=null; } }
+
+/* ========== RFID MODE (fast poll) ========== */
+let rfidTimer=null;
+function startRfidLoop(){
+  $('rfid-hint').textContent = 'Tap your card on the reader…';
+  const poll = async ()=>{
+    try{
+      const res = await postJSON(API_RFID, {}); // server returns success when card matches an admin
+      if(res && res.success){
+        showBannerOK(`Admin: ${res.name||res.emp_id||'Verified'}`, res.photo_url);
+        stopRfidLoop(); return;
+      }
+    }catch(e){ /* ignore */ }
+    rfidTimer = setTimeout(poll, 220);
+  };
+  poll();
+}
+function stopRfidLoop(){ if(rfidTimer){ clearTimeout(rfidTimer); rfidTimer=null; } }
+
+/* ========== PASSWORD MODE ========== */
+async function submitAdminPw(){
+  const pw = $('adminPw').value;
+  const result = $('pw-result');
+  if(!pw){ result.style.color="#c0342d"; result.textContent="Password required."; return; }
+  try{
+    const j = await postJSON(API_PASSWORD, { password: pw });
+    if(j.success){
+      result.style.color="#157347"; result.textContent="Access granted.";
+      showBannerOK("Admin verified (password)", j.photo_url);
+    } else {
+      result.style.color="#c0342d"; result.textContent=j.message || "Invalid password";
+      showBannerFail(result.textContent);
+    }
+  }catch(e){
+    result.style.color="#c0342d"; result.textContent="Error: "+e;
+    showBannerFail("Error during password verify");
+  }
+}
+
+/* ========== Lifecycle helpers ========== */
+function stopAllLoops(){ stopFaceLoop(); stopFingerLoop(); stopRfidLoop(); }
+
+/* Boot */
+document.addEventListener('DOMContentLoaded', ()=>{
+  showPanel('face'); // default mode
+});
+</script>
+</body>
+</html>

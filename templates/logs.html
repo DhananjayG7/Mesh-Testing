@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Logs</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    :root{
+      --sb-inset-right: 36px; /* inset custom scrollbar */
+      --sb-width: 22px;
+      --sb-radius: 12px;
+      --sb-track: rgba(0,0,0,0.06);
+      --sb-thumb: #bfbfbf;
+      --sb-min-thumb: 48px;
+
+      --hdrH: 72px;
+      --header-max: 800px;
+    }
+
+    html, body { height:100%; margin:0; background:#f9f6ef; -webkit-user-select:none; user-select:none; }
+
+    /* Shared header (same as other pages) */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0; min-height: var(--hdrH);
+      width:100%; max-width: var(--header-max); margin:0 auto; box-sizing:border-box;
+    }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:30px; display:block; }
+    .menu-back-btn{
+      background:#eee; color:#205081; padding:9px 18px; font-size:1rem;
+      border:none; border-radius:8px; font-weight:600; cursor:pointer;
+      transition:background .16s; min-width:92px; margin-right:12px;
+    }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+    /* Buttons used elsewhere on the page */
+    .btn{ border:none; border-radius:8px; padding:10px 16px; font-weight:600; cursor:pointer; }
+    .btn-gray{ background:#eee; color:#205081; }
+    .btn-main{ background:#205081; color:#fff; }
+    .btn-main:hover{ background:#ffa500; }
+
+    /* Content frame */
+    .frame{
+      position:relative; width:100%; max-width: 980px;
+      margin: 16px auto 24px; padding: 0 18px 24px; box-sizing:border-box;
+    }
+
+    /* Search + toolbar */
+    .toolbar{
+      display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10);
+      padding: 16px; margin-bottom: 10px;
+    }
+    .toolbar .group{ display:flex; align-items:center; gap:8px; }
+    .input{
+      padding:10px 12px; font-size:1rem; border-radius:8px; border:1.5px solid #eee; background:#fff; color:#333;
+      width: 240px;
+    }
+    .select{ padding:10px 12px; font-size:1rem; border-radius:8px; border:1.5px solid #eee; background:#fff; color:#333; }
+
+    /* Table container */
+    .panel{
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10);
+      overflow:hidden;
+    }
+    .table-wrap{
+      overflow:auto; max-height: calc(100vh - 220px);
+    }
+    table{ width:100%; border-collapse: collapse; min-width:760px; }
+    th, td{ padding:12px 12px; text-align:left; border-bottom:1px solid #f0f0f0; font-size:0.98rem; }
+    th{
+      position:sticky; top:0; background:#f7f9fc; color:#205081; z-index:1;
+      font-weight:700;
+    }
+    tr:nth-child(even) td{ background:#fafbfe; }
+
+    /* Footer pagination */
+    .footer{
+      display:flex; align-items:center; justify-content:space-between; padding:10px 14px; gap:10px;
+      background:#fff; border-top:1px solid #f0f0f0;
+    }
+    .pager{ display:flex; align-items:center; gap:8px; }
+    .muted{ color:#666; font-size:0.95rem; }
+
+    /* Inset custom scrollbar UI */
+    .sb-track{
+      position:fixed; right:var(--sb-inset-right); width:var(--sb-width);
+      top:var(--hdrH); height:calc(100vh - var(--hdrH)); z-index:9998;
+      background:var(--sb-track); border-radius:var(--sb-radius); box-sizing:border-box; display:none;
+    }
+    .sb-thumb{
+      position:absolute; left:2px; right:2px; top:0;
+      height:80px; background:var(--sb-thumb); border-radius:calc(var(--sb-radius) - 2px);
+      box-shadow:0 1px 2px rgba(0,0,0,0.25); cursor:grab; touch-action:none;
+    }
+    .sb-thumb:active{ cursor:grabbing; }
+
+    /* Float scroll buttons */
+    .float-scroll{
+      position:fixed; right:14px; bottom:18px; z-index:9999; display:flex; flex-direction:column; gap:10px;
+    }
+    .float-scroll .btn{
+      width:44px; height:44px; padding:0; border-radius:50%; display:flex; align-items:center; justify-content:center;
+      box-shadow:0 6px 14px rgba(0,0,0,0.15);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header (same pattern as Register/Import/Export/Settings/Diagnostic) -->
+  <div class="header" id="pageHeader">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'">← Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <div class="frame">
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="group">
+        <input id="q" class="input" type="search" placeholder="Search emp_id or name…" enterkeyhint="search" autocomplete="off">
+        <button class="btn btn-main" id="searchBtn"><i class="fa fa-search"></i> Search</button>
+        <!-- Keyboard button -->
+        <button class="btn btn-gray" id="kbdBtn" title="Show Keyboard"><i class="fa fa-keyboard"></i></button>
+      </div>
+      <div class="group">
+        <label class="muted">Rows:</label>
+        <select id="limit" class="select">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <!-- Export removed -->
+    </div>
+
+    <!-- Table -->
+    <div class="panel">
+      <div class="table-wrap" id="tableWrap">
+        <table id="logsTable">
+          <thead>
+            <tr>
+              <th style="width:90px;">Index</th>
+              <th style="width:140px;">emp_id</th>
+              <th>Name</th>
+              <th style="width:160px;">Device&nbsp;ID</th>
+              <th style="width:190px;">Timestamp</th>
+              <th style="width:130px;">Mode</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <!-- rows here -->
+          </tbody>
+        </table>
+      </div>
+      <div class="footer">
+        <div class="muted" id="statusText">—</div>
+        <div class="pager">
+          <button class="btn btn-gray" id="prevBtn"><i class="fa fa-chevron-left"></i></button>
+          <span class="muted" id="pageText">Page 1</span>
+          <button class="btn btn-gray" id="nextBtn"><i class="fa fa-chevron-right"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inset custom scrollbar -->
+  <div class="sb-track" id="sbTrack"><div class="sb-thumb" id="sbThumb"></div></div>
+
+  <!-- Floating scroll buttons -->
+  <div class="float-scroll" aria-hidden="true">
+    <button class="btn btn-main" id="scrollTopBtn" title="Scroll to top"><i class="fa fa-arrow-up"></i></button>
+    <button class="btn btn-gray" id="scrollDownBtn" title="Scroll down a page"><i class="fa fa-arrow-down"></i></button>
+  </div>
+
+  <script>
+  // ---------- State ----------
+  let state = {
+    q: "",
+    limit: 100,
+    offset: 0,
+    page: 1,
+    lastCount: 0
+  };
+
+  // ---------- DOM ----------
+  const qEl = document.getElementById('q');
+  const limitEl = document.getElementById('limit');
+  const searchBtn = document.getElementById('searchBtn');
+  const kbdBtn = document.getElementById('kbdBtn');
+  const tbody = document.getElementById('tbody');
+  const pageText = document.getElementById('pageText');
+  const statusText = document.getElementById('statusText');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const tableWrap = document.getElementById('tableWrap');
+
+  // ---------- Keyboard integration ----------
+  async function showKeyboard(){
+    try { await fetch('/api/show_keyboard'); } catch (_) {}
+  }
+  kbdBtn.addEventListener('click', async ()=>{
+    await showKeyboard();
+    qEl.focus();
+  });
+  qEl.addEventListener('focus', showKeyboard);
+
+  // ---------- Fetch ----------
+  async function loadLogs(){
+    const params = new URLSearchParams();
+    if (state.q) params.set('q', state.q);
+    params.set('limit', String(state.limit));
+    params.set('offset', String(state.offset));
+    const url = '/api/logs?' + params.toString();
+
+    statusText.textContent = 'Loading…';
+    try{
+      const r = await fetch(url);
+      const j = await r.json();
+      if(!j || !j.success){ throw new Error('Failed'); }
+      renderRows(j.rows || []);
+      state.lastCount = (j.rows || []).length;
+      updateFooter();
+    }catch(err){
+      tbody.innerHTML = `<tr><td colspan="6" style="color:#b00020">Failed to load logs</td></tr>`;
+      statusText.textContent = 'Error';
+    }
+  }
+
+  // ---------- Render ----------
+  function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function renderRows(rows){
+    if(!rows.length){
+      tbody.innerHTML = `<tr><td colspan="6" class="muted">No entries</td></tr>`;
+      return;
+    }
+    // "index" should be the logs.id (AUTOINCREMENT)
+    tbody.innerHTML = rows.map(r=>{
+      return `<tr>
+        <td>${esc(r.id)}</td>
+        <td>${esc(r.emp_id)}</td>
+        <td>${esc(r.name)}</td>
+        <td>${esc(r.device_id)}</td>
+        <td>${esc(r.ts)}</td>
+        <td>${esc(r.mode)}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function updateFooter(){
+    const page = Math.max(1, state.page);
+    pageText.textContent = `Page ${page}`;
+    const showing = state.lastCount;
+    statusText.textContent = `Showing ${showing} row(s) — limit ${state.limit}, offset ${state.offset}`;
+    prevBtn.disabled = (state.offset <= 0);
+    nextBtn.disabled = (showing < state.limit);
+  }
+
+  // ---------- Events ----------
+  searchBtn.addEventListener('click', ()=>{
+    state.q = (qEl.value||"").trim();
+    state.offset = 0; state.page = 1;
+    loadLogs();
+  });
+  qEl.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){
+      state.q = (qEl.value||"").trim();
+      state.offset = 0; state.page = 1;
+      loadLogs();
+    }
+  });
+  limitEl.addEventListener('change', ()=>{
+    state.limit = parseInt(limitEl.value, 10) || 100;
+    state.offset = 0; state.page = 1;
+    loadLogs();
+  });
+  prevBtn.addEventListener('click', ()=>{
+    if(state.offset <= 0) return;
+    state.offset = Math.max(0, state.offset - state.limit);
+    state.page = Math.max(1, state.page - 1);
+    loadLogs();
+  });
+  nextBtn.addEventListener('click', ()=>{
+    // only advance if last page was full
+    if(state.lastCount < state.limit) return;
+    state.offset += state.limit;
+    state.page += 1;
+    loadLogs();
+  });
+
+  // ---------- Floating scroll buttons ----------
+  document.getElementById('scrollTopBtn').addEventListener('click', ()=>{
+    (document.scrollingElement || document.documentElement).scrollTo({ top:0, behavior:'smooth' });
+  });
+  document.getElementById('scrollDownBtn').addEventListener('click', ()=>{
+    const el = document.scrollingElement || document.documentElement;
+    el.scrollBy({ top: Math.max(200, el.clientHeight * 0.8), behavior:'smooth' });
+  });
+
+  // ---------- Inset Scrollbar ----------
+  (function initInsetScroll(){
+    const head  = document.getElementById('pageHeader');
+    const track = document.getElementById('sbTrack');
+    const thumb = document.getElementById('sbThumb');
+
+    let dragging=false, startY=0, startScrollTop=0;
+    const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+    function toggleTrack(){
+      const el = document.scrollingElement || document.documentElement;
+      if (el.scrollHeight > el.clientHeight + 1) track.style.display = 'block';
+      else track.style.display = 'none';
+    }
+    function refreshThumb(){
+      const el = document.scrollingElement || document.documentElement;
+      const trackH = track.clientHeight;
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      const ratio = el.clientHeight / (el.scrollHeight || 1);
+      const minH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sb-min-thumb')) || 48;
+      let th = Math.round(trackH * ratio);
+      th = clamp(th, minH, trackH);
+      thumb.style.height = th + 'px';
+      const maxTop = trackH - th;
+      const t = maxScroll ? (el.scrollTop / maxScroll) * maxTop : 0;
+      thumb.style.transform = 'translateY(' + t + 'px)';
+    }
+    function layout(){
+      const hb = Math.ceil(head.getBoundingClientRect().bottom);
+      const h  = window.innerHeight - hb;
+      track.style.top = hb + 'px';
+      track.style.height = h + 'px';
+      toggleTrack(); refreshThumb();
+    }
+
+    thumb.addEventListener('pointerdown', e=>{
+      dragging=true; thumb.setPointerCapture(e.pointerId);
+      startY=e.clientY; startScrollTop=(document.scrollingElement||document.documentElement).scrollTop; e.preventDefault();
+    });
+    function endDrag(e){ if(!dragging) return; dragging=false; try{ thumb.releasePointerCapture(e.pointerId);}catch(_){ } }
+    thumb.addEventListener('pointerup', endDrag);
+    thumb.addEventListener('pointercancel', endDrag);
+    thumb.addEventListener('lostpointercapture', ()=> dragging=false);
+    thumb.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      const el = document.scrollingElement || document.documentElement;
+      const trackH = track.clientHeight;
+      const th = thumb.offsetHeight;
+      const maxTop = Math.max(1, trackH - th);
+      const maxScroll = Math.max(1, el.scrollHeight - el.clientHeight);
+      const dY = e.clientY - startY;
+      const perPixel = maxScroll / maxTop;
+      el.scrollTop = clamp(startScrollTop + dY * perPixel, 0, maxScroll);
+    });
+
+    track.addEventListener('pointerdown', e=>{
+      if (e.target !== track) return;
+      const el = document.scrollingElement || document.documentElement;
+      const rect = track.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      const th = thumb.offsetHeight;
+      const trackH = track.clientHeight;
+      const maxTop = Math.max(1, trackH - th);
+      const maxScr = Math.max(1, el.scrollHeight - el.clientHeight);
+      const tgtTop = Math.max(0, Math.min(clickY - th/2, maxTop));
+      el.scrollTop = (tgtTop / maxTop) * maxScr;
+    });
+
+    document.addEventListener('scroll', refreshThumb, { passive:true });
+    window.addEventListener('resize', layout);
+    window.addEventListener('load', layout);
+    setTimeout(layout, 200);
+  })();
+
+  // ---------- Boot ----------
+  window.addEventListener('DOMContentLoaded', loadLogs);
+  </script>
+</body>
+</html>

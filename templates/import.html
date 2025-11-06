@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Import (Scan QR)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Keep your theme reference (even if 404 on some devices) -->
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <style>
+    /* ----- Global background & fonts ----- */
+    body{
+      background:#f9f6ef;
+      margin:0;
+      display:flex;
+      flex-direction:column;
+      min-height:100vh;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    /* ----- Shared header (matches your other page) ----- */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0; min-height:60px; box-sizing:border-box;
+    }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:34px; display:block; }
+    .menu-back-btn{
+      background:#eee; color:#205081; padding:9px 18px; font-size:1rem;
+      border:none; border-radius:8px; font-weight:600; cursor:pointer;
+      transition:background .16s; min-width:92px; margin-right:12px;
+    }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+    /* ----- Page layout ----- */
+    .wrap{ max-width:720px; width:100%; padding:24px; margin: 0 auto 32px; }
+    .card{
+      background:#fff; border-radius:16px; box-shadow:0 8px 24px rgba(0,0,0,.08);
+      padding:24px; text-align:center;
+    }
+    #qrwrap{ margin:16px auto }
+    #qrimg{
+      width:260px; height:260px; display:block; margin:0 auto;
+      border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.08)
+    }
+    #qrcanvas{ width:260px; height:260px; margin:0 auto; display:none }
+    .hint{ color:#466; opacity:.85; margin-top:10px }
+    .status{ margin-top:14px }
+    .btn{ background:#205081; color:#fff; border:0; border-radius:10px; padding:10px 16px; cursor:pointer }
+
+    /* Small helper to keep content nicely spaced below the header */
+    .content{ display:flex; justify-content:center; width:100%; }
+  </style>
+</head>
+<body>
+  <!-- Header (same as your registration page) -->
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'">← Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="wrap">
+      <div class="card">
+        <h2>Import data</h2>
+        <p>Scan this QR with your phone. Then upload the Excel file from the phone page.</p>
+
+        <div id="qrwrap" aria-label="QR code">
+          <!-- Prefer server PNG QR (works offline); fall back to inline canvas if needed -->
+          <img id="qrimg" alt="QR code">
+          <div id="qrcanvas"></div>
+        </div>
+
+        <div class="hint" id="hint"></div>
+        <div class="status" id="status">Preparing token…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tiny inline QR generator as a fallback (no CDN) -->
+  <script>
+  /*! qrcode.js (MIT) - minimal build */
+  !function(o){function t(o){this.mode=s,this.data=o}function e(o,t){this.typeNumber=o,this.errorCorrectLevel=t,this.modules=null,this.moduleCount=0,this.dataList=[]}var s=4,n=0,r=1,i=2,a=3;function l(o,t){this.totalCount=o,this.dataCount=t}function c(o,t){this.buffer=[],this.length=0,null!=o&&(this.put(o,t))}t.prototype={getLength:function(){return this.data.length},write:function(o){for(var t=0;t<this.data.length;t++)o.put(this.data.charCodeAt(t),8)}};var d=[[],[new l(19,7),new l(16,10),new l(13,13),new l(9,17)],[new l(34,10),new l(28,16),new l(22,22),new l(16,28)],[new l(55,15),new l(44,26),new l(34,18),new l(26,22)],[new l(80,20),new l(64,18),new l(48,26),new l(36,16)],[new l(108,26),new l(86,24),new l(62,18),new l(46,22)],[new l(136,18),new l(108,16),new l(76,24),new l(60,28)],[new l(156,20),new l(124,18),new l(88,18),new l(66,26)],[new l(194,24),new l(154,22),new l(110,22),new l(86,26)]];function h(o){for(var t=0;t<o.length&&0==o[t];)t++;for(var e=new Array(o.length-t+1),s=0;s<e.length;s++)e[s]=o[s+t];return e}function u(o,t){for(;o.length<t;)o.unshift(0)}function f(o,t){for(var e=o.slice(0),s=0;s<e.length;s++)e[s]^=t[s];return e}function p(o,t){var e=[];e.length=o+t;for(var s=0;s<e.length;s++)e[s]=0;for(s=0;s<o;s++)e[s]=0;return e}function m(o){for(var t=0,e=1;0!=o;)e=(e<<1)^((128&e)?285:0),e&=255,o--,t=e;return t}c.prototype={getBuffer:function(){return this.buffer},getLengthInBits:function(){return 8*this.length},put:function(o,t){for(var e=0;e<t;e++)this.putBit(1==(o>>t-e-1&1))},putBit:function(o){var t=this.length>>3;this.buffer.length<=t&&this.buffer.push(0),o&&(this.buffer[t]|=128>>>this.length%8),this.length++}};function g(o,t){for(var e=new c,s=0;s<o.dataList.length;s++){var n=o.dataList[s];e.put(n.mode,4),e.put(n.getLength(),o.getLengthInBits(n.mode)),n.write(e)}for(var r=o.getRSBlocks(),i=0,a=0;a<r.length;a++)i+=r[a].dataCount;for(;e.getLengthInBits()>8*i;)o.typeNumber++;for(;e.getLengthInBits()+4<=8*i&&e.put(0,1),e.getLengthInBits()%8!=0;)e.putBit(!1);for(var l=[],d=0;d<i;d++)l[d]=255&e.getBuffer()[d];return function(o,t){for(var e=[],s=0;s<t;s++){for(var n=[],r=0;r<o;r++)n.push(0);e.push(n)}return e}(o.moduleCount,o.moduleCount),l}e.prototype={addData:function(o){this.dataList.push(new t(o))},getLengthInBits:function(o){return 8*this.dataList[0].getLength()},make:function(){this.typeNumber=1;for(var o=!1;!o;){this.makeImpl(!1,this.getBestMaskPattern());if(this.typeNumber>=8||this.dataList[0].getLength()>70){this.typeNumber++;if(this.typeNumber>=9)break}else o=!0}},makeImpl:function(o,t){this.moduleCount=21+4*(this.typeNumber-1),this.modules=new Array(this.moduleCount);for(var e=0;e<this.moduleCount;e++)this.modules[e]=new Array(this.moduleCount);this.setupPositionProbePattern(0,0),this.setupPositionProbePattern(this.moduleCount-7,0),this.setupPositionProbePattern(0,this.moduleCount-7),this.mapData(g(this),t)},mapData:function(o,t){for(var e=0,s=this.moduleCount-1,n=-1,r=this.moduleCount-1;r>0;r-=2){6==r&&r--;for(;;){for(var i=0;i<2;i++)this.modules[s][r-i]=o.length>0&&(255&o.shift());if((s+=n)<0||this.moduleCount<=s){s-=n,n=-n;break}}}},setupPositionProbePattern:function(o,t){for(var e=-1;e<=7;e++)if(!(o+e<=-1||this.moduleCount<=o+e))for(var s=-1;s<=7;s++)t+s<=-1||this.moduleCount<=t+s||(this.modules[o+e][t+s]=e>=0&&e<=6&&(0==s||6==s)||s>=0&&s<=6&&(0==e||6==e)||e>=2&&e<=4&&s>=2&&s<=4)},getBestMaskPattern:function(){return 0}};function y(o,t){var e=document.createElement("canvas");e.width=t,e.height=t;for(var s=e.getContext("2d"),n=t/o.moduleCount,r=0;r<o.moduleCount;r++)for(var i=0;i<o.moduleCount;i++)o.modules[r][i]&&(s.fillRect(i*n,r*n,n,n));return e}function v(o){this._el=o}v.prototype.makeCode=function(o){var s=new e(n,r);s.addData(o),s.make();this._el.innerHTML="";this._el.appendChild(y(s,260))};window.QRCode=v;
+  </script>
+
+  <script>
+    let token=null, phoneUrl=null, poll=null, expiresAt=null;
+    const statusEl = document.getElementById('status');
+    const hintEl = document.getElementById('hint');
+    const imgEl = document.getElementById('qrimg');
+    const canvasWrap = document.getElementById('qrcanvas');
+
+    function setStatus(t){ statusEl.textContent = t; }
+    function setHint(t){ hintEl.textContent = t || ''; }
+
+    function buildFallbackCanvas(url){
+      try{
+        canvasWrap.style.display='block';
+        new QRCode(canvasWrap).makeCode(url);
+      }catch(_){}
+    }
+
+    async function begin(){
+      try{
+        const r = await fetch('/api/handoff_begin?mode=import');
+        if(!r.ok){ setStatus('Error starting handoff'); return; }
+        const j = await r.json();
+        if(!j.success){ setStatus(j.message||'Failed'); return; }
+
+        token = j.token;
+        phoneUrl = j.url || j.phone_url || j.link || (location.origin + '/handoff/import/' + token);
+        expiresAt = j.expires_at || null;
+
+        // Prefer server PNG QR (always offline-safe)
+        imgEl.src = '/api/qr_for_handoff/' + token + '.png';
+        imgEl.onload = () => { setStatus('Scan the code with your phone'); };
+        imgEl.onerror = () => {
+          // Fallback to inline QR if PNG route not available
+          buildFallbackCanvas(phoneUrl);
+          setStatus('Scan the code with your phone');
+        };
+
+        // Optional expiry hint
+        if (expiresAt) setHint('This code expires soon.');
+
+        startPoll();
+      }catch(e){
+        setStatus('Network error');
+      }
+    }
+
+    async function tick(){
+      if(!token) return;
+      try{
+        const r = await fetch('/api/handoff_status/'+encodeURIComponent(token));
+        if(!r.ok) return;
+        const j = await r.json();
+        if(j.exists && j.mode==='import' && j.have_file){
+          setStatus('File received. You can proceed on the phone.');
+          clearInterval(poll);
+        }else if(j.exists && j.expired){
+          setStatus('QR expired. Reload this page to create a new code.');
+          clearInterval(poll);
+        }
+      }catch(e){}
+    }
+
+    function startPoll(){
+      clearInterval(poll);
+      poll = setInterval(tick, 1500);
+    }
+
+    begin();
+  </script>
+</body>
+</html>

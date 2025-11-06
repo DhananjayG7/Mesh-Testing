@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Order · Select Items (Quick)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <style>
+    body{ background:#f9f6ef; margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+
+    /* Header */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 32px 0 32px; min-height:60px; box-sizing:border-box;
+    }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:34px; display:block; }
+    .menu-back-btn{
+      background:#eee; color:#205081; padding:9px 18px; font-size:1rem;
+      border:none; border-radius:8px; font-weight:700; cursor:pointer;
+      transition:background .16s; min-width:92px;
+    }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+    /* ======= LOGIN STAGE (matches user.html look) ======= */
+    :root{ --hdrH:72px; }
+    .stage{
+      position:fixed; left:0; right:0; top:var(--hdrH); bottom:0;
+      display:flex; align-items:center; justify-content:center;
+      padding:18px; box-sizing:border-box;
+      z-index: 10;
+    }
+    .panel{ display:none; width:100%; height:100%; }
+    .panel.show{ display:flex; align-items:center; justify-content:center; }
+    .live-card{
+      position:relative;
+      width:min(520px, 96vw);
+      aspect-ratio: 3/4;
+      border-radius:16px; overflow:hidden;
+      background:#000;
+      box-shadow: 0 10px 28px rgba(32,80,129,.18);
+      border:4px solid #eef2f7;
+      display:flex; align-items:center; justify-content:center;
+    }
+    #live-video{
+      position:absolute; inset:0;
+      width:100%; height:100%; object-fit:cover; display:block;
+    }
+    .stream-modal-bg{
+      display:none; position:absolute; inset:0; z-index:10;
+      background:rgba(38,62,94,.12); justify-content:center; align-items:center;
+    }
+    .stream-modal-box{ background:#fff; border-radius:16px; box-shadow:0 4px 22px #20508125; padding:18px 16px; text-align:center; }
+    .stream-modal-box .big-icon{ font-size:48px; margin-bottom:8px; }
+
+    /* Bottom banner (30% height) */
+    .banner{
+      position:fixed; left:0; right:0; bottom:0;
+      height:30vh; min-height:180px; max-height:360px;
+      background: transparent;
+      transform: translateY(110%);
+      transition: transform .18s ease;
+      z-index: 9999;
+      display:flex; align-items:center; justify-content:center;
+      pointer-events:none; padding: 10px; will-change: transform;
+    }
+    .banner.show{ transform: translateY(0); }
+    .banner-card{
+      width:min(1100px, 96vw);
+      background: rgba(255,255,255,0.98);
+      border-radius:18px; box-shadow:0 10px 28px rgba(0,0,0,0.25);
+      display:flex; align-items:center; gap:16px; padding:14px 16px;
+      pointer-events:auto;
+    }
+    .banner .avatar{
+      width:72px; height:72px; border-radius:50%; overflow:hidden; border:4px solid #eef2f7; background:#f2f2f2;
+      display:flex; align-items:center; justify-content:center; flex:0 0 72px;
+    }
+    .banner .avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .banner .avatar.fail{ background:#ffebee; border-color:#ffd6db; color:#b02a37; font-size:34px; }
+    .banner .ok{ color:#157347; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .fail{ color:#b02a37; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+    .banner .sub{ color:#205081; white-space:pre-line; font-size:1rem; }
+
+    /* ======= ORDER PAGE AREA (hidden until login) ======= */
+    .page{ padding: 18px 22px 100px; max-width:1100px; margin:0 auto; }
+    .hidden{ display:none !important; }
+
+    .top-strip{ display:flex; align-items:stretch; gap:18px; flex-wrap:wrap; margin-top:16px; }
+    .user-card{
+      display:none;
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10);
+      padding:16px; min-width:290px; flex:0 0 320px; align-items:center; gap:14px;
+    }
+    .user-photo, .user-fallback{
+      width:72px; height:72px; border-radius:12px; border:3px solid #eee; background:#e5e5e5;
+      display:flex; align-items:center; justify-content:center; color:#9aa4b2;
+      flex:0 0 auto; overflow:hidden;
+    }
+    .user-photo img{ width:100%; height:100%; object-fit:cover; display:block; }
+    .user-fallback i{ font-size:32px; }
+    .user-lines .name{ font-weight:800; color:#205081; font-size:1.12rem; line-height:1.15; max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .user-lines .meta{ color:#64748b; font-size:.98rem; margin-top:3px; }
+
+    .slot-badge{
+      display:none;
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10);
+      padding:16px 18px; color:#205081; font-weight:700; align-items:center; gap:10px;
+      flex:1 1 260px; min-height:72px;
+    }
+    .slot-badge .pill{
+      background:#e9eef7; color:#205081; font-weight:800; padding:6px 10px; border-radius:999px; font-size:.92rem; margin-right:8px;
+    }
+    .slot-badge small{ color:#6b7280; font-weight:600; }
+
+    .closed-wrap{
+      display:none; text-align:center; margin:44px auto 0; max-width:480px;
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10); padding:28px 26px;
+    }
+    .closed-wrap h3{ color:#b00020; margin:0 0 10px 0; font-size:1.3rem; }
+    .closed-wrap .next{ color:#205081; font-weight:700; }
+
+    .grid{ margin-top:18px; display:grid; grid-template-columns: repeat(auto-fill,minmax(230px,1fr)); gap:16px; }
+    .section{ display:none; background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10); padding:16px; }
+    .section h4{ margin:0 0 10px 0; color:#205081; font-size:1.05rem; letter-spacing:.3px; position:relative; padding-left:22px; }
+    .section h4:before{ content:"\f2e7"; font-family:"Font Awesome 6 Free"; font-weight:900; position:absolute; left:0; top:-1px; color:#205081; }
+    .item{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      background:#f8fafc; border:1px solid #eef2f7; border-radius:12px; padding:12px 14px; margin:10px 0;
+      cursor:pointer; transition:transform .05s ease, box-shadow .12s ease;
+    }
+    .item:active{ transform:translateY(1px); box-shadow:0 2px 10px rgba(32,80,129,.12); }
+    .item .left{ display:flex; align-items:center; gap:10px; }
+    .item .icon{
+      width:44px; height:44px; border-radius:12px; border:3px solid #eaeaea; display:flex; align-items:center; justify-content:center; background:#fff; color:#205081; font-size:1.3rem;
+    }
+    .nm{ font-weight:800; color:#205081; }
+    .tap-hint{ color:#64748b; font-size:.9rem; font-weight:700; }
+
+    .toast{ position:fixed; left:50%; transform:translateX(-50%); bottom:18px; z-index:9999; background:#205081; color:#fff; padding:10px 14px; border-radius:10px; font-weight:700; display:none; box-shadow:0 6px 24px #20508133; }
+    .toast.err{ background:#b00020; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <button class="menu-back-btn" onclick="goBack()"><i class="fa-solid fa-arrow-left"></i> Back</button>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <!-- ===== LOGIN STAGE (Face visible; Finger & RFID run in background) ===== -->
+  <div class="stage" id="login-stage">
+    <div class="panel show" id="panel-face">
+      <div class="live-card">
+        <img id="live-video" src="/video_feed" alt="Live camera">
+        <div class="stream-modal-bg" id="face-modal">
+          <div class="stream-modal-box">
+            <h4 class="title">Align your face</h4>
+            <div class="hint">You can also use Fingerprint or RFID</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Success / fail banner -->
+  <div class="banner" id="banner" aria-live="polite" aria-atomic="true">
+    <div class="banner-card">
+      <div class="avatar" id="banner-avatar"></div>
+      <div class="lines">
+        <div class="ok"   id="banner-title-ok"   style="display:none;">Successfully verified</div>
+        <div class="fail" id="banner-title-fail" style="display:none;">Not identified</div>
+        <div class="sub"  id="banner-sub"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ORDER PAGE (hidden until login success) ===== -->
+  <div class="page hidden" id="order-page">
+    <!-- User + Slot -->
+    <div class="top-strip">
+      <div id="userCard" class="user-card">
+        <div id="userPhotoWrap" class="user-photo" style="display:none;">
+          <img id="userPhoto" src="" alt="photo">
+        </div>
+        <div id="userFallback" class="user-fallback"><i class="fa-solid fa-user"></i></div>
+        <div class="user-lines">
+          <div id="userName" class="name">—</div>
+          <div id="userMeta" class="meta">Emp ID: —</div>
+        </div>
+      </div>
+
+      <div id="slotBadge" class="slot-badge">
+        <span class="pill" id="slotName">Slot</span>
+        <div>
+          <div>Active Window</div>
+          <small id="slotTime">--:-- → --:--</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Closed panel -->
+    <div id="closedBox" class="closed-wrap">
+      <h3>Canteen is closed now</h3>
+      <div>Next opening at <span id="nextOpen" class="next">—</span></div>
+      <div style="color:#64748b; margin-top:6px; font-weight:600;">Taking you to home…</div>
+    </div>
+
+    <!-- Menu sections -->
+    <div id="sections" class="grid"></div>
+    <div id="tapHint" class="tap-hint" style="display:none; margin-top:8px;">Tap an item to place order (single quantity)</div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+<script>
+  /* ======================== STATE ======================== */
+  // All three modalities enabled here
+  let MODES = { auth_face: true, auth_finger: true, auth_rfid: true };
+  let CURRENT_USER = null; // {emp_id, name, image}
+  let LOGIN_SLOT = null;
+  let ALLOWED_SLOT = null;
+
+  /* ======================= HELPERS ======================= */
+  function goBack(){ if(history.length>1) history.back(); else window.location.href='/menu'; }
+  async function loadModes(){ try{ const r=await fetch('/api/modes_get'); const m=await r.json(); MODES=Object.assign(MODES,m||{});}catch(_){} }
+  function toast(text, isErr=false){
+    const t=document.getElementById('toast'); t.textContent=text; t.classList.toggle('err',!!isErr);
+    t.style.display='block'; setTimeout(()=> t.style.display='none', 1600);
+  }
+  const sleep = ms => new Promise(s=>setTimeout(s,ms));
+  function timeStrToMin(t){ const [h,m]=(t||'0:0').split(':').map(x=>parseInt(x,10)||0); return h*60+m; }
+  function nowMinutes(){ const d=new Date(); return d.getHours()*60+d.getMinutes(); }
+  function withinSlot(now, fromM, toM){ return (fromM<=toM)? (now>=fromM && now<=toM) : (now>=fromM || now<=toM); }
+
+  function isIdle(data){
+    if(!data || typeof data!=='object') return true;
+    const txt=[data.message,data.reason,data.code].filter(Boolean).join(' ').toLowerCase();
+    const hints=['no finger','no_finger','no card','no_card','no tag','no_tag','timeout','time out','idle','waiting','place your finger','scan rfid','no_face','no face'];
+    return hints.some(h=> txt.includes(h));
+  }
+  function normalizeId(data){
+    if (!data || typeof data !== 'object') return null;
+    const possible = [data.user_id, data.employee_id, data.emp_id, data.id, data.userId, data.empId];
+    for (const v of possible){
+      if (v === 0) return '0';
+      if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+    }
+    return null;
+  }
+  function normalizeName(data){
+    if (!data || typeof data !== 'object') return '';
+    return (data.name || data.username || data.emp_name || '').toString();
+  }
+  function isExplicitFail(data){
+    if (!data || typeof data !== 'object') return false;
+    if (data.success === false) return true;
+    const txt = [data.message, data.reason, data.code, data.status].filter(Boolean).join(' ').toLowerCase();
+    const negatives = ['not identified','denied','rejected','no match','mismatch','failed','fail','unknown_face','unknown face','fingerprint not recognized','rfid not recognized'];
+    return negatives.some(n => txt.includes(n));
+  }
+  function isSuccess(data){
+    if (data && data.success === true) return true;
+    return normalizeId(data) !== null;
+  }
+
+  /* ===== Banner helpers ===== */
+  const HOLD_MS_FAIL = 1000;
+  let bannerTimer = null;
+  let currentUserId = null;
+  let currentUserName = '';
+  let bannerVisible = false;
+  const bannerState = { key: 0, kind: null };
+
+  function showBannerCore({success, img, emp_id, name, autoHide}){
+    const banner = document.getElementById('banner');
+    const avatar = document.getElementById('banner-avatar');
+    const ok = document.getElementById('banner-title-ok');
+    const fail = document.getElementById('banner-title-fail');
+    const sub = document.getElementById('banner-sub');
+
+    bannerState.key += 1;
+    bannerState.kind = success ? 'success' : 'fail';
+    banner.dataset.key = String(bannerState.key);
+
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+
+    avatar.className = 'avatar' + (success ? '' : ' fail');
+    avatar.innerHTML = '';
+    if (success && img){
+      const im = document.createElement('img'); im.src = img; avatar.appendChild(im);
+    } else if (!success){
+      avatar.innerHTML = '<i class="fa fa-times"></i>';
+    }
+
+    ok.style.display = success ? 'block' : 'none';
+    fail.style.display = success ? 'none' : 'block';
+
+    const lines = [];
+    if (emp_id) lines.push(`Emp ID: ${emp_id}`);
+    if (name)   lines.push(`Name: ${name}`);
+    sub.innerText = lines.join('\n');
+
+    // trigger
+    // eslint-disable-next-line no-unused-expressions
+    banner.offsetHeight;
+    banner.classList.add('show');
+    bannerVisible = true;
+
+    if (autoHide){
+      bannerTimer = setTimeout(() => {
+        banner.classList.remove('show');
+        bannerVisible = false;
+      }, HOLD_MS_FAIL);
+    }
+  }
+  async function showSuccessPinned({emp_id, name, img}){
+    currentUserId = emp_id || currentUserId;
+    currentUserName = name || currentUserName;
+    showBannerCore({ success:true, img:img||null, emp_id: currentUserId, name: currentUserName, autoHide:false });
+    // hydrate avatar
+    try{
+      const u = await fetch('/api/get_user_image', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ emp_id: String(currentUserId) })
+      }).then(r=>r.json());
+      const url = u && (u.image || u.photo || u.face_image);
+      if (url){
+        const avatar = document.getElementById('banner-avatar');
+        avatar.className = 'avatar';
+        avatar.innerHTML = '';
+        const im = document.createElement('img'); im.src = url; avatar.appendChild(im);
+      }
+    }catch(_){}
+  }
+  function showFailOnce(){
+    if (currentUserId) return; // suppress fail if already succeeded
+    showBannerCore({ success:false, img:null, emp_id:'', name:'', autoHide:true });
+  }
+
+  /* ================= USER CARD ================= */
+  async function populateUserCard(emp_id, fallbackName){
+    let img=null, name=fallbackName||'';
+    try{
+      const r=await fetch('/api/get_user_image',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ emp_id:String(emp_id) })});
+      const j=await r.json();
+      if(j && j.image) img=j.image;
+    }catch(_){}
+    CURRENT_USER={emp_id:String(emp_id), name:name||'', image:img||''};
+
+    document.getElementById('userName').textContent = (CURRENT_USER.name||'(No name)');
+    document.getElementById('userMeta').textContent = 'Emp ID: ' + CURRENT_USER.emp_id;
+
+    const wrapPhoto=document.getElementById('userPhotoWrap');
+    const fallback=document.getElementById('userFallback');
+    if(CURRENT_USER.image){
+      document.getElementById('userPhoto').src=CURRENT_USER.image;
+      wrapPhoto.style.display='flex';
+      fallback.style.display='none';
+    }else{
+      wrapPhoto.style.display='none';
+      fallback.style.display='flex';
+    }
+    document.getElementById('userCard').style.display='flex';
+  }
+
+  /* ============== SLOT RESOLUTION (visual) ================= */
+  async function resolveLoginSlotVisual(){
+    const r = await fetch('/api/time_slot_master/list');
+    const data = await r.json();
+    const slots = data.slots || [];
+    const shiftsBy = {}; (data.shifts||[]).forEach(s=> shiftsBy[s.shift_code]=s.shift_name);
+
+    const nowM = nowMinutes();
+    let chosen = null;
+    for(const s of slots){
+      const f=timeStrToMin(s.from_time), t=timeStrToMin(s.to_time);
+      if(withinSlot(nowM,f,t)){
+        chosen = { slot_code:s.slot_code, slot_name:s.slot_name, from_time:s.from_time, to_time:s.to_time, shift_name:(shiftsBy[s.shift_code]||''), shift_code:s.shift_code };
+        break;
+      }
+    }
+    if(!chosen){
+      try{
+        const x = await fetch('/api/is_canteen_open'); const j = await x.json();
+        document.getElementById('nextOpen').textContent = j.next_time || '-';
+      }catch(_){}
+      document.getElementById('closedBox').style.display='block';
+      setTimeout(()=> { window.location.href='/menu'; }, 2000);
+      return null;
+    }
+    LOGIN_SLOT = chosen;
+    document.getElementById('slotBadge').style.display='flex';
+    document.getElementById('slotName').textContent = chosen.shift_name ? `${chosen.shift_name} · ${chosen.slot_name}` : chosen.slot_name;
+    document.getElementById('slotTime').textContent = `${chosen.from_time} → ${chosen.to_time}`;
+    return chosen;
+  }
+
+  /* ======= POLICY: allowed slot ======= */
+  async function resolveAllowedSlot(){
+    if(!CURRENT_USER) return null;
+    try{
+      const r=await fetch('/api/allowed_slot_for_user', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ emp_id: CURRENT_USER.emp_id })
+      });
+      if(r.ok){
+        const j=await r.json();
+        if(j && j.allowed && j.slot_code){
+          ALLOWED_SLOT = {
+            slot_code:j.slot_code, slot_name:j.slot_name, from_time:j.from_time, to_time:j.to_time,
+            shift_name:j.shift_name||'', overtime_granted: !!j.overtime_granted
+          };
+          return ALLOWED_SLOT;
+        }else{
+          toast(j && j.reason ? j.reason : 'Not allowed in this shift', true);
+          document.getElementById('closedBox').style.display='block';
+          document.getElementById('nextOpen').textContent = j && j.next_time ? j.next_time : '-';
+          return null;
+        }
+      }
+    }catch(_){}
+    ALLOWED_SLOT = LOGIN_SLOT;
+    return ALLOWED_SLOT;
+  }
+
+  /* ===================== MENU ==================== */
+  async function loadMenuForAllowedSlot(){
+    const host=document.getElementById('sections'); host.innerHTML='';
+    document.getElementById('tapHint').style.display='none';
+    if(!ALLOWED_SLOT){ return; }
+
+    let rows=[];
+    try{
+      const r = await fetch('/api/items_for_current_slot');
+      const j = await r.json();
+      rows = j.items || [];
+    }catch(_){ rows=[]; }
+
+    const byCat = {};
+    rows.forEach(row=>{
+      const cat = row.category;
+      if(!byCat[cat]) byCat[cat] = [];
+      byCat[cat].push({ item_code: row.item_code, item_name: row.item_name });
+    });
+
+    const cats = Object.keys(byCat).sort();
+    cats.forEach(cat=>{
+      const wrap=document.createElement('div'); wrap.className='section'; wrap.style.display='block';
+      const h4=document.createElement('h4'); h4.textContent=cat; wrap.appendChild(h4);
+
+      byCat[cat].forEach(it=>{
+        const row=document.createElement('div'); row.className='item';
+        row.innerHTML = `
+          <div class="left">
+            <div class="icon"><i class="fa-solid fa-mug-hot"></i></div>
+            <div class="nm">${it.item_name}</div>
+          </div>
+          <div class="tap-hint">Tap to order</div>
+        `;
+        row.onclick = ()=> quickOrder(it.item_code, it.item_name);
+        wrap.appendChild(row);
+      });
+
+      host.appendChild(wrap);
+    });
+
+    if(cats.length>0) document.getElementById('tapHint').style.display='block';
+  }
+
+  async function quickOrder(item_code, item_name){
+    if(!CURRENT_USER || !CURRENT_USER.emp_id){ toast('Please authenticate first', true); return; }
+    if(!ALLOWED_SLOT){ toast('Not allowed in this shift', true); return; }
+    const body = {
+      emp_id: CURRENT_USER.emp_id,
+      items: [{ item_code, qty: 1 }],
+      print_coupon: true,
+      user_name: CURRENT_USER.name || ''
+    };
+    try{
+      const res = await fetch('/api/order_submit',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      const out = await res.json();
+      if(res.ok && out && out.success){
+        toast('Order placed & printing…');
+      }else{
+        const msg = (out && out.message) || (out && out.rejected && out.rejected[0] && out.rejected[0].message) || 'Order failed';
+        toast(msg, true);
+      }
+    }catch(e){
+      toast('Network error', true);
+    }
+  }
+
+  /* ============= AUTH LOOPS (Face + Finger + RFID) ============= */
+  let faceLoopActive=false, _faceInFlight=false;
+  let fingerLoopActive=false, _fingerInFlight=false;
+  let rfidLoopActive=false, _rfidInFlight=false;
+
+  async function afterLogin(userId, userName){
+    // Stop all auth loops and switch UI
+    faceLoopActive=false; fingerLoopActive=false; rfidLoopActive=false;
+    document.getElementById('login-stage').classList.add('hidden');
+    document.getElementById('order-page').classList.remove('hidden');
+
+    await populateUserCard(userId, userName||'');
+
+    const openSlot = await resolveLoginSlotVisual();
+    if(!openSlot) return;
+    const policySlot = await resolveAllowedSlot();
+    if(!policySlot) return;
+
+    await loadMenuForAllowedSlot();
+  }
+
+  async function faceLoop(){
+    if(faceLoopActive) return; faceLoopActive=true;
+
+    // Smaller probe canvas for perf
+    const canvas = document.createElement('canvas'); canvas.width=224; canvas.height=168;
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    const probeImg = document.getElementById('live-video'); // visible stream
+
+    while(faceLoopActive){
+      if(!MODES.auth_face){ await sleep(140); continue; }
+      if(!probeImg.complete || probeImg.naturalWidth===0){ await sleep(80); continue; }
+      if(_faceInFlight){ await sleep(20); continue; }
+      _faceInFlight = true;
+
+      try{
+        ctx.drawImage(probeImg, 0, 0, canvas.width, canvas.height);
+        const imgBase64 = canvas.toDataURL('image/jpeg', 0.5);
+        const res = await fetch('/api/face_login', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ image: imgBase64 })
+        });
+        const data = await res.json().catch(()=>null);
+
+        if (!isIdle(data)){
+          if (isExplicitFail(data)){
+            showFailOnce();
+          } else if (isSuccess(data)){
+            const id = normalizeId(data);
+            const name = normalizeName(data);
+            await showSuccessPinned({ emp_id:id, name:name, img:null });
+            await afterLogin(id, name);
+            return;
+          }
+        }
+      }catch(_){ /* ignore */ }
+      finally { _faceInFlight=false; }
+
+      await sleep(70);
+    }
+  }
+
+  async function fingerLoop(){
+    if(fingerLoopActive) return; fingerLoopActive=true;
+
+    while(fingerLoopActive){
+      if(!MODES.auth_finger){ await sleep(200); continue; }
+      if(_fingerInFlight){ await sleep(20); continue; }
+      _fingerInFlight = true;
+
+      try{
+        const r = await fetch('/api/finger_identify', { method:'POST' });
+        const data = await r.json().catch(()=>null);
+
+        if (!isIdle(data)){
+          if (isExplicitFail(data)){
+            showFailOnce();
+          } else if (isSuccess(data)){
+            const id = normalizeId(data);
+            const name = normalizeName(data);
+            await showSuccessPinned({ emp_id:id, name:name, img:null });
+            await afterLogin(id, name);
+            return;
+          }
+        }
+      }catch(_){ /* ignore */ }
+      finally { _fingerInFlight=false; }
+
+      await sleep(100);
+    }
+  }
+
+  async function rfidLoop(){
+    if(rfidLoopActive) return; rfidLoopActive=true;
+
+    while(rfidLoopActive){
+      if(!MODES.auth_rfid){ await sleep(200); continue; }
+      if(_rfidInFlight){ await sleep(20); continue; }
+      _rfidInFlight = true;
+
+      try{
+        const r = await fetch('/api/rfid_login', { method:'POST' });
+        const data = await r.json().catch(()=>null);
+
+        if (!isIdle(data)){
+          if (isExplicitFail(data)){
+            showFailOnce();
+          } else if (isSuccess(data)){
+            const id = normalizeId(data);
+            const name = normalizeName(data);
+            await showSuccessPinned({ emp_id:id, name:name, img:null });
+            await afterLogin(id, name);
+            return;
+          }
+        }
+      }catch(_){ /* ignore */ }
+      finally { _rfidInFlight=false; }
+
+      await sleep(100);
+    }
+  }
+
+  /* ========================= INIT ========================= */
+  (async function init(){
+    await loadModes();
+    // show login stage; hide order page
+    document.getElementById('login-stage').classList.remove('hidden');
+    document.getElementById('order-page').classList.add('hidden');
+
+    // Start all three modalities
+    faceLoop(); fingerLoop(); rfidLoop();
+  })();
+</script>
+</body>
+</html>

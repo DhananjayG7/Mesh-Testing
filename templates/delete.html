@@ -1,0 +1,270 @@
+{% extends "base.html" %}
+
+{% block title %}User Delete (Unified){% endblock %}
+
+{% block page_css %}
+body { background: #f9f6ef; font-family: sans-serif; margin: 0; }
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 38px 0 38px; min-height: 60px; box-sizing: border-box;
+}
+.logo-main { height: 44px; display:block; }
+.logo-right { height: 34px; display:block; }
+.menu-back-btn {
+  background:#eee; color:#205081; padding:9px 18px; font-size:1rem;
+  border:none; border-radius:8px; font-weight:600; cursor:pointer;
+  transition:background 0.16s; min-width:92px; margin-right:12px;
+}
+.menu-back-btn:hover { background:#ffa500; color:#fff; }
+.container {
+  background: #fff; border-radius: 16px; box-shadow: 0 4px 18px rgba(32,80,129,0.10);
+  max-width: 420px; margin: 46px auto 24px auto; padding: 36px 38px 32px 38px;
+}
+h2 { color: #205081; text-align: center; margin-bottom: 18px; }
+label { font-weight: bold; }
+input {
+  padding: 10px 16px; font-size: 1.05rem; border-radius: 7px;
+  border: 1.5px solid #eee; width: 93%; margin-bottom: 14px;
+}
+.actions { display: flex; flex-direction: column; gap: 15px; margin: 24px 0 16px 0;}
+button {
+  padding: 13px 22px; font-size: 1.06rem; font-weight: 600; border: none;
+  border-radius: 8px; background: #ffa500; color: #fff; cursor: pointer;
+  transition: background 0.16s;
+}
+button:hover { background: #ff7c00; }
+.delete-all { background: #d12b3c; }
+.delete-all:hover { background: #a90b1c; }
+.result { margin-top: 10px; font-size: 1.13rem; color: #205081; min-height: 26px; text-align: center;}
+
+/* --- Lightweight in-page Password Modal (works with OSK) --- */
+.pw-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: none; align-items: center; justify-content: center; z-index: 9999;
+}
+.pw-modal {
+  width: 92vw; max-width: 420px; background: #fff; border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25); padding: 18px;
+}
+.pw-modal h3 { margin: 6px 0 12px; color:#205081; text-align:center; font-size:1.2rem; }
+.pw-row { display:flex; flex-direction:column; gap:10px; }
+.pw-input {
+  width: 100%; box-sizing: border-box; padding: 12px 14px; font-size: 1.05rem;
+  border-radius: 8px; border: 1.5px solid #eaeaea;
+}
+.pw-actions { display:flex; gap:10px; margin-top: 12px; }
+.pw-btn {
+  flex:1; padding: 12px 14px; border: none; border-radius: 10px; font-weight:700;
+  background:#ffa500; color:#fff; cursor:pointer;
+}
+.pw-btn.cancel { background:#e0e0e0; color:#333; }
+.pw-hint { font-size:.9rem; color:#777; text-align:center; margin-top:6px; }
+.pw-show { display:flex; }
+{% endblock %}
+
+{% block body %}
+<div class="header">
+  <div class="left">
+    <button class="menu-back-btn" onclick="window.location.href='/menu'">
+      <i class="fa fa-arrow-left"></i> Menu
+    </button>
+  </div>
+  <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+    <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+  </div>
+  <div class="right">
+    <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+  </div>
+</div>
+
+<div class="container">
+  <h2>Delete User Modules</h2>
+  <label>Employee ID</label><br>
+  <!-- numeric OSK hint -->
+  <input id="emp_id" type="text" inputmode="numeric" placeholder="Enter Employee ID"><br>
+
+  <div class="actions">
+    <button onclick="onDeleteFace()"><i class="fa fa-user-circle"></i> Delete Face</button>
+    <button onclick="onDeleteFingerprint()"><i class="fa fa-fingerprint"></i> Delete Fingerprint</button>
+    <button onclick="onDeleteRFID()"><i class="fa fa-id-card"></i> Delete RFID</button>
+    <button onclick="onDeleteUser()" class="delete-all"><i class="fa fa-user-times"></i> Delete User</button>
+    <button onclick="onDeleteAllFingerprints()" class="delete-all"><i class="fa fa-broom"></i> Delete All Fingerprints</button>
+  </div>
+  <div class="result" id="result-msg"></div>
+</div>
+
+<!-- Password Modal (in-DOM, OSK-compatible) -->
+<div id="pw-backdrop" class="pw-modal-backdrop" aria-hidden="true">
+  <div class="pw-modal" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+    <h3 id="pw-title">Admin Password</h3>
+    <div class="pw-row">
+      <input id="pw-input" class="pw-input" type="password" placeholder="Enter Admin Password" autocomplete="off" />
+      <div class="pw-actions">
+        <button class="pw-btn cancel" id="pw-cancel">Cancel</button>
+        <button class="pw-btn" id="pw-ok">Confirm</button>
+      </div>
+      <div class="pw-hint">Your on-screen keyboard will open here.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const resultEl = document.getElementById('result-msg');
+
+  function setMsg(text) {
+    resultEl.innerText = text || "";
+  }
+
+  // --- Generic Password Modal control (works with your OSK) ---
+  function openPwModal() {
+    return new Promise((resolve) => {
+      const backdrop = document.getElementById('pw-backdrop');
+      const input = document.getElementById('pw-input');
+      const btnOk = document.getElementById('pw-ok');
+      const btnCancel = document.getElementById('pw-cancel');
+
+      function cleanup() {
+        btnOk.removeEventListener('click', onOk);
+        btnCancel.removeEventListener('click', onCancel);
+        input.removeEventListener('keydown', onKey);
+      }
+      function onOk() {
+        const val = input.value.trim();
+        cleanup();
+        closePwModal();
+        resolve(val || null);
+      }
+      function onCancel() {
+        cleanup();
+        closePwModal();
+        resolve(null);
+      }
+      function onKey(e) {
+        if (e.key === 'Enter') { onOk(); }
+        if (e.key === 'Escape') { onCancel(); }
+      }
+
+      // show
+      backdrop.classList.add('pw-show');
+      backdrop.setAttribute('aria-hidden', 'false');
+
+      // Prepare input
+      input.value = '';
+      input.focus();
+
+      // ---- OSK HOOKS (use whichever your osk.js exposes) ----
+      // 1) If your OSK provides OSK.open(inputElement)
+      try {
+        if (window.OSK && typeof window.OSK.open === 'function') {
+          window.OSK.open(input);
+        }
+      } catch(e) {}
+      // 2) Or if you use a helper like openKeyboardFor('pw-input')
+      try {
+        if (typeof window.openKeyboardFor === 'function') {
+          window.openKeyboardFor('pw-input');
+        }
+      } catch(e) {}
+      // 3) Fallback: focusing should already bring up the OSK, if your OSK listens to focus events.
+
+      // wire events
+      btnOk.addEventListener('click', onOk);
+      btnCancel.addEventListener('click', onCancel);
+      input.addEventListener('keydown', onKey);
+    });
+  }
+
+  function closePwModal() {
+    const backdrop = document.getElementById('pw-backdrop');
+    backdrop.classList.remove('pw-show');
+    backdrop.setAttribute('aria-hidden', 'true');
+  }
+
+  // ---- Action wrappers (replace prompt() flows) ----
+  async function withAdminPassword(doFetch) {
+    const admin_password = await openPwModal();
+    if (!admin_password) return; // user cancelled
+    try {
+      await doFetch(admin_password);
+    } catch (e) {
+      setMsg("Request failed.");
+    }
+  }
+
+  async function onDeleteFace() {
+    const emp_id = document.getElementById('emp_id').value.trim();
+    if (!emp_id) return setMsg("Enter Employee ID.");
+    await withAdminPassword(async (admin_password) => {
+      const res = await fetch('/api/face_delete', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ emp_id, admin_password })
+      });
+      const data = await res.json();
+      setMsg(data.message || (data.success ? "Face deleted." : "Failed to delete face."));
+    });
+  }
+
+  async function onDeleteFingerprint() {
+    const emp_id = document.getElementById('emp_id').value.trim();
+    if (!emp_id) return setMsg("Enter Employee ID.");
+    await withAdminPassword(async (admin_password) => {
+      const res = await fetch('/api/finger_delete', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ user_id: emp_id, admin_password })
+      });
+      const data = await res.json();
+      setMsg(data.message || (data.success ? "Fingerprint deleted." : "Failed to delete fingerprint."));
+    });
+  }
+
+  async function onDeleteRFID() {
+    const emp_id = document.getElementById('emp_id').value.trim();
+    if (!emp_id) return setMsg("Enter Employee ID.");
+    await withAdminPassword(async (admin_password) => {
+      const res = await fetch('/api/rfid_delete', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ employee_id: emp_id, admin_password })
+      });
+      const data = await res.json();
+      setMsg(data.message || (data.success ? "RFID deleted." : "Failed to delete RFID."));
+    });
+  }
+
+  async function onDeleteUser() {
+    const emp_id = document.getElementById('emp_id').value.trim();
+    if (!emp_id) return setMsg("Enter Employee ID.");
+    await withAdminPassword(async (admin_password) => {
+      const res = await fetch('/api/delete_user', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ emp_id, admin_password })
+      });
+      const data = await res.json();
+      setMsg(data.message || (data.success ? "User deleted." : "Failed to delete user."));
+    });
+  }
+
+  async function onDeleteAllFingerprints() {
+    if (!confirm("This will delete ALL fingerprints from the sensor (factory wipe). Continue?")) return;
+    await withAdminPassword(async (admin_password) => {
+      const res = await fetch('/api/finger_delete_all', {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ admin_password })
+      });
+      const data = await res.json();
+      setMsg(data.message || (data.success ? "All fingerprints deleted." : "Failed to delete all fingerprints."));
+    });
+  }
+</script>
+
+<!-- If you need to load your OSK assets here, do it below.
+<script src="/static/js/osk.js"></script>
+<link rel="stylesheet" href="/static/css/osk.css">
+-->
+{% endblock %}

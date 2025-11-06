@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Menu</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Base styles -->
+  <link rel="stylesheet" href="/static/css/styles.css" />
+  <!-- Font Awesome 6 (icon names updated to v6 equivalents) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+
+  <style>
+    :root{
+      /* inset custom scrollbar a bit from the right bezel */
+      --sb-inset-right: 36px;
+      --sb-width: 22px;
+      --sb-radius: 12px;
+      --header-max: 800px;
+    }
+
+    html,body{
+      height:100%;
+      margin:0;
+      background:#f9f6ef;
+      overflow:hidden; /* scroll inner area, not body */
+      -webkit-user-select:none;
+      user-select:none;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    /* Header */
+    .header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:18px 32px 0 32px;
+      width:100%;
+      max-width:var(--header-max);
+      margin:0 auto;
+      box-sizing:border-box;
+    }
+    .logo-main{height:44px;}
+    .logo-right{height:34px;}
+
+    /* Scrollable region below header */
+    .scroll-area{
+      position:relative;
+      width:100%;
+      height:calc(100vh - 90px); /* JS recalcs based on actual header height */
+      overflow-y:auto;
+      overscroll-behavior:contain;
+    }
+
+    /* Grid of tiles */
+    .main-menu{
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:center;
+      gap:40px;
+      margin-top:60px;
+      padding:0 16px 24px;
+      box-sizing:border-box;
+      max-width:1000px;
+      margin-left:auto;
+      margin-right:auto;
+    }
+
+    .menu-card{
+      background:#fff;
+      border-radius:18px;
+      box-shadow:0 4px 20px rgba(32,80,129,0.10);
+      width:240px;
+      padding:38px 18px 28px 18px;
+      text-align:center;
+      transition: box-shadow .2s, background .18s, transform .06s;
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      cursor:pointer;
+    }
+    .menu-card:hover{
+      box-shadow:0 8px 32px rgba(32,80,129,0.13);
+      background:#faf8f3;
+    }
+    .menu-card:active{ transform: scale(0.99); }
+
+    .menu-icon{
+      font-size:3.8rem;
+      margin-bottom:20px;
+      color:#ffa500;
+      line-height:1;
+    }
+    .menu-title{
+      font-weight:700;
+      color:#205081;
+      font-size:1.45rem;
+      margin-bottom:8px;
+    }
+    .menu-sub{
+      color:#6a7b8a;
+      font-size:.92rem;
+    }
+
+    @media (max-width: 950px){
+      .main-menu{ flex-direction:column; align-items:center; gap:22px; }
+      .menu-card{ width:96vw; max-width:350px; }
+    }
+
+    /* Custom inset scrollbar */
+    .custom-scroll{
+      position:fixed;
+      right:var(--sb-inset-right);
+      width:var(--sb-width);
+      top:90px; /* JS will set to header's bottom */
+      height:calc(100vh - 90px); /* JS will set exact */
+      z-index:9999;
+      display:none; /* only when overflow exists */
+      background:rgba(0,0,0,0.06);
+      border-radius:var(--sb-radius);
+      box-sizing:border-box;
+    }
+    .custom-thumb{
+      position:absolute;
+      left:2px;
+      right:2px;
+      top:0;
+      height:80px; /* JS adjusts */
+      background:#bfbfbf;
+      border-radius:calc(var(--sb-radius) - 2px);
+      box-shadow:0 1px 2px rgba(0,0,0,0.25);
+      cursor:grab;
+      touch-action:none;
+    }
+    .custom-thumb:active{ cursor:grabbing; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header" id="pageHeader" role="banner" aria-label="Application header">
+    <div style="width:60px;" aria-hidden="true"></div>
+    <img src="/static/img/logo_company.png" class="logo-main" alt="Company" />
+    <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage" />
+  </div>
+
+  <!-- Scrollable content -->
+  <div class="scroll-area" id="scrollArea" aria-label="Main content">
+    <div class="main-menu" role="navigation" aria-label="Main menu">
+
+      <div class="menu-card" onclick="location.href='/user'" role="link" tabindex="0" aria-label="Login User">
+        <div class="menu-icon"><i class="fa-solid fa-right-to-bracket"></i></div>
+        <div class="menu-title">Login User</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/register'" role="link" tabindex="0" aria-label="Register User">
+        <div class="menu-icon"><i class="fa-solid fa-user-plus"></i></div>
+        <div class="menu-title">Register User</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/edit'" role="link" tabindex="0" aria-label="Update User">
+        <div class="menu-icon"><i class="fa-solid fa-user-pen"></i></div>
+        <div class="menu-title">Update User</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/delete'" role="link" tabindex="0" aria-label="Delete User">
+        <div class="menu-icon"><i class="fa-solid fa-user-xmark"></i></div>
+        <div class="menu-title">Delete User</div>
+      </div>
+
+      <!-- Import via QR (phone upload to device) -->
+      <div class="menu-card" onclick="location.href='/import'" role="link" tabindex="0" aria-label="Import">
+        <div class="menu-icon"><i class="fa-solid fa-file-import"></i></div>
+        <div class="menu-title">Import</div>
+        <div class="menu-sub">Scan QR → upload from phone</div>
+      </div>
+
+      <!-- Export via QR (phone downloads from device) -->
+      <div class="menu-card" onclick="location.href='/export'" role="link" tabindex="0" aria-label="Export">
+        <div class="menu-icon"><i class="fa-solid fa-file-export"></i></div>
+        <div class="menu-title">Export</div>
+        <div class="menu-sub">Scan QR → download on phone</div>
+      </div>
+
+      <!-- NEW: Logs -->
+      <div class="menu-card" onclick="location.href='/logs'" role="link" tabindex="0" aria-label="Logs">
+        <div class="menu-icon"><i class="fa-solid fa-clipboard-list"></i></div>
+        <div class="menu-title">Logs</div>
+        <div class="menu-sub">View login activity</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/settings'" role="link" tabindex="0" aria-label="Settings">
+        <div class="menu-icon"><i class="fa-solid fa-sliders"></i></div>
+        <div class="menu-title">Settings</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/diagnostic'" role="link" tabindex="0" aria-label="Diagnostic">
+        <div class="menu-icon"><i class="fa-solid fa-stethoscope"></i></div>
+        <div class="menu-title">Diagnostic</div>
+      </div>
+
+      <div class="menu-card" onclick="location.href='/modes'" role="link" tabindex="0" aria-label="Modes">
+        <div class="menu-icon"><i class="fa-solid fa-toggle-on"></i></div>
+        <div class="menu-title">Modes</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Inset drag scrollbar -->
+  <div class="custom-scroll" id="customScroll" aria-hidden="true">
+    <div class="custom-thumb" id="customThumb"></div>
+  </div>
+
+  <script>
+    (function (){
+      const area   = document.getElementById('scrollArea');
+      const header = document.getElementById('pageHeader');
+      const track  = document.getElementById('customScroll');
+      const thumb  = document.getElementById('customThumb');
+
+      let dragging=false, startY=0, startScrollTop=0;
+
+      const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+      function layout(){
+        const rect = header.getBoundingClientRect();
+        const top  = Math.ceil(rect.bottom);
+        const h    = window.innerHeight - top;
+
+        track.style.top    = top + 'px';
+        track.style.height = h + 'px';
+        area.style.height  = h + 'px';
+
+        refreshThumb();
+        toggleTrack();
+      }
+
+      function toggleTrack(){
+        track.style.display = (area.scrollHeight > area.clientHeight + 1) ? 'block' : 'none';
+      }
+
+      function refreshThumb(){
+        const trackH    = track.clientHeight;
+        const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
+
+        const ratio   = area.clientHeight / (area.scrollHeight || 1);
+        const minThumb = 48;
+        const th      = clamp(Math.round(trackH * ratio), minThumb, trackH);
+        thumb.style.height = th + 'px';
+
+        const maxTop   = trackH - th;
+        const sTop     = area.scrollTop;
+        const tTop     = maxScroll ? (sTop / maxScroll) * maxTop : 0;
+        thumb.style.transform = 'translateY(' + tTop + 'px)';
+      }
+
+      // drag
+      thumb.addEventListener('pointerdown', e=>{
+        dragging = true;
+        thumb.setPointerCapture(e.pointerId);
+        startY = e.clientY;
+        startScrollTop = area.scrollTop;
+        e.preventDefault();
+      });
+
+      thumb.addEventListener('pointermove', e=>{
+        if(!dragging) return;
+        const trackH = track.clientHeight;
+        const th     = thumb.offsetHeight;
+        const maxTop = Math.max(1, trackH - th);
+        const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight);
+        const deltaY = e.clientY - startY;
+        const scrollPerPixel = maxScroll / maxTop;
+        area.scrollTop = clamp(startScrollTop + deltaY * scrollPerPixel, 0, maxScroll);
+      });
+
+      function endDrag(e){
+        if(!dragging) return;
+        dragging=false;
+        try{ thumb.releasePointerCapture(e.pointerId); }catch(_){}
+      }
+      thumb.addEventListener('pointerup', endDrag);
+      thumb.addEventListener('pointercancel', endDrag);
+      thumb.addEventListener('lostpointercapture', ()=> dragging=false);
+
+      // click on track to jump
+      track.addEventListener('pointerdown', e=>{
+        if(e.target !== track) return;
+        const rect = track.getBoundingClientRect();
+        const clickY = e.clientY - rect.top;
+        const th = thumb.offsetHeight;
+        const trackH = track.clientHeight;
+        const maxTop = Math.max(1, trackH - th);
+        const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight);
+
+        const targetTop   = clamp(clickY - th/2, 0, maxTop);
+        const targetScroll= (targetTop / maxTop) * maxScroll;
+        area.scrollTop = targetScroll;
+      });
+
+      area.addEventListener('scroll', refreshThumb, {passive:true});
+      window.addEventListener('resize', layout);
+      window.addEventListener('load', layout);
+      setTimeout(layout, 300); // safety reflow
+    })();
+  </script>
+</body>
+</html>

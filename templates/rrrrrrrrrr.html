@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}User Registration (Unified){% endblock %}
+
+{% block page_css %}
+body { background: #f9f6ef; font-family: sans-serif; margin: 0; }
+.header { display: flex; align-items: center; justify-content: space-between; padding: 18px 38px 0 38px; min-height: 60px; box-sizing: border-box; }
+.logo-main { height: 44px; display:block; }
+.logo-right { height: 34px; display:block; }
+.menu-back-btn { background:#eee; color:#205081; padding:9px 18px; font-size:1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background 0.16s; min-width:92px; margin-right:12px; }
+.menu-back-btn:hover { background:#ffa500; color:#fff; }
+.container { background: #fff; border-radius: 16px; box-shadow: 0 4px 18px rgba(32,80,129,0.10); max-width: 480px; margin: 46px auto 24px auto; padding: 36px 38px 32px 38px; }
+h2 { color: #205081; text-align: center; margin-bottom: 18px; }
+label { font-weight: bold; display:block; }
+input, select { padding: 10px 16px; font-size: 1.05rem; border-radius: 7px; border: 1.5px solid #eee; width: 100%; margin-bottom: 14px; box-sizing: border-box; }
+button { margin: 7px 0; padding: 13px 22px; font-size: 1.04rem; font-weight: 600; border: none; border-radius: 8px; background: #ffa500; color: #fff; cursor: pointer; }
+button:disabled { opacity: 0.65; cursor: not-allowed; }
+button:hover:enabled { background: #ff7c00; }
+.actions { display: flex; flex-direction: column; gap: 10px; margin: 24px 0 16px 0;}
+.result { margin-top: 10px; font-size: 1.13rem; color: #205081; min-height: 26px; text-align: center;}
+.modal-bg { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100vw; height: 100vh; background: rgba(38,62,94,0.25); justify-content: center; align-items: center; }
+.modal-box { background: #fff; border-radius: 18px; box-shadow: 0 4px 22px #20508125; padding: 32px 40px 22px 40px; max-width: 340px; text-align: center; position: relative; }
+.modal-box img { width: 120px; height: 120px; border-radius: 11px; margin-bottom: 9px; border: 3px solid #eee;}
+.modal-box .emp-info { margin: 10px 0 7px 0; font-size: 1.09rem;}
+.modal-box button { background: #205081; color: #fff; font-size: 1rem; padding: 9px 24px; margin-top: 13px; }
+#face-capture-box { display: none; flex-direction: column; align-items: center; }
+.live-box { position: relative; width: 270px; height: 200px; margin: 0 auto 7px auto; }
+#camera-canvas { position: absolute; left: 0; top: 0; z-index: 2; }
+#camera-stream { position: absolute; left: 0; top: 0; z-index: 1; border-radius: 11px; border: 5px solid #eee; }
+.instructions { text-align: center; color: #666; margin-top: 6px; min-height: 22px; font-size: 1.02rem; font-weight: 500;}
+{% endblock %}
+
+{% block body %}
+<div class="header">
+  <div class="left">
+    <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
+  </div>
+  <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+    <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+  </div>
+  <div class="right">
+    <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+  </div>
+</div>
+
+<div class="container">
+  <h2>Register User</h2>
+
+  <label for="emp_id">Employee ID</label>
+  <input id="emp_id" type="text" inputmode="numeric" placeholder="Enter Employee ID">
+
+  <label for="name">Name</label>
+  <input id="name" type="text" placeholder="Enter Name">
+
+  <!-- NEW: Role picker -->
+  <label for="role">Role</label>
+  <select id="role">
+    <option>User</option>
+    <option>Admin</option>
+    <option>Super Admin</option>
+  </select>
+
+  <div class="actions">
+    <button id="faceBtn" onclick="startFaceReg()" disabled>Register Face</button>
+    <button id="fingerBtn" onclick="registerFingerprint()" disabled>Register Fingerprint</button>
+    <button id="rfidBtn" onclick="registerRFID()" disabled>Register RFID Card</button>
+  </div>
+
+  <div class="result" id="result-msg"></div>
+
+  <div id="face-capture-box">
+    <div class="live-box">
+      <img id="camera-stream" src="/video_feed" width="270" height="200" />
+      <canvas id="camera-canvas" width="270" height="200"></canvas>
+    </div>
+    <div class="instructions" id="faceInstructions">Align your face in the green box and hold steady...</div>
+    <button onclick="cancelFaceReg()" style="margin-top:8px;background:#aaa;">Cancel</button>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-bg">
+  <div class="modal-box">
+    <img id="modal-img" src="" alt="User Face">
+    <div class="emp-info" id="modal-empinfo"></div>
+    <div id="modal-msg" style="color:#d20;font-weight:bold;font-size:1.08rem;margin-bottom:6px;">Face already registered!</div>
+    <button onclick="closeModal()">Close</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const empField    = document.getElementById('emp_id');
+  const nameField   = document.getElementById('name');
+  const roleField   = document.getElementById('role');  // NEW
+  const faceBtn     = document.getElementById('faceBtn');
+  const fingerBtn   = document.getElementById('fingerBtn');
+  const rfidBtn     = document.getElementById('rfidBtn');
+
+  [empField, nameField, roleField].forEach(f => f.addEventListener('input', validateFields));
+  function validateFields() {
+    const ok = empField.value.trim() && nameField.value.trim();
+    faceBtn.disabled = fingerBtn.disabled = rfidBtn.disabled = !ok;
+  }
+
+  // --- NEW: Upsert user (emp_id, name, role) before any biometric step ---
+  async function upsertUser() {
+    const emp_id = empField.value.trim();
+    const name   = nameField.value.trim();
+    const role   = roleField.value;
+    if (!emp_id || !name) {
+      document.getElementById('result-msg').innerText = "Please fill Employee ID and Name.";
+      return false;
+    }
+    try {
+      const res = await fetch('/api/user_upsert', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ emp_id, name, role })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        document.getElementById('result-msg').innerText = data.message || 'Failed to save user.';
+        return false;
+      }
+      return true;
+    } catch (e) {
+      document.getElementById('result-msg').innerText = 'Failed to reach server.';
+      return false;
+    }
+  }
+
+  // --- FACE REGISTRATION FLOW ---
+  let faceRegActive = false, faceDone = false, steadyStart = null;
+
+  async function startFaceReg() {
+    const ok = await upsertUser();  // ensure role/name saved first
+    if (!ok) return;
+
+    faceRegActive = true; faceDone = false; steadyStart = null;
+    document.getElementById('face-capture-box').style.display = "flex";
+    document.querySelector('.actions').style.display = "none";
+    document.getElementById('result-msg').innerText = "";
+    document.getElementById('faceInstructions').innerText = "Align your face in the green box and hold steady...";
+    setTimeout(faceCaptureLoop, 300);
+  }
+
+  function cancelFaceReg() {
+    document.getElementById('face-capture-box').style.display = "none";
+    document.querySelector('.actions').style.display = "flex";
+    document.getElementById('faceInstructions').innerText = "";
+    faceRegActive = false; faceDone = false;
+  }
+
+  function drawBox(ctx, good) {
+    ctx.clearRect(0,0,270,200);
+    ctx.strokeStyle = good ? "#38b000" : "#aaa";
+    ctx.lineWidth = good ? 4 : 2;
+    ctx.strokeRect(65,24,140,140);
+  }
+
+  function faceCaptureLoop() {
+    if (!faceRegActive || faceDone) return;
+    const canvas = document.getElementById('camera-canvas');
+    const ctx = canvas.getContext('2d');
+    const detectionOK = true; // placeholder for any front-end checks
+    drawBox(ctx, detectionOK);
+
+    if (detectionOK) {
+      if (!steadyStart) steadyStart = Date.now();
+      const elapsed = (Date.now() - steadyStart) / 1000.0;
+      if (elapsed > 2.0) {
+        document.getElementById('faceInstructions').innerText = "Checking for duplicates...";
+        setTimeout(registerFaceAuto, 200);
+        faceDone = true;
+      } else {
+        document.getElementById('faceInstructions').innerText = "Hold steady ("+(2.0-elapsed).toFixed(1)+"s)...";
+      }
+    } else {
+      steadyStart = null;
+      document.getElementById('faceInstructions').innerText = "Align your face in the green box...";
+    }
+    if (!faceDone) setTimeout(faceCaptureLoop, 130);
+  }
+
+  async function registerFaceAuto() {
+    faceBtn.disabled = true;
+    document.getElementById('faceInstructions').innerText = "Capturing...";
+
+    const emp_id = empField.value.trim();
+    const name   = nameField.value.trim();
+    const role   = roleField.value;
+
+    const imgBase64 = await getSnapshotBase64();
+
+    // Duplicate check
+    const checkRes  = await fetch('/api/check_face_duplicate', {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({image: imgBase64})
+    });
+    const checkData = await checkRes.json();
+
+    if (checkData.duplicate) {
+      showModal(checkData.image, checkData.emp_id, checkData.name);
+      document.getElementById('faceInstructions').innerText = "Face already registered!";
+      faceDone = false; setTimeout(cancelFaceReg, 1800);
+      return;
+    }
+
+    // Register
+    const res  = await fetch('/api/face_register', {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({emp_id, name, role, image: imgBase64}) // role included
+    });
+    const data = await res.json();
+
+    document.getElementById('result-msg').innerText = data.message;
+    if (data.success) {
+      document.getElementById('faceInstructions').innerText = "Face registered successfully!";
+      setTimeout(cancelFaceReg, 1200);
+    } else {
+      document.getElementById('faceInstructions').innerText = data.message || 'Registration failed.';
+      faceDone = false; setTimeout(faceCaptureLoop, 1200);
+    }
+  }
+
+  async function getSnapshotBase64() {
+    const img = document.getElementById('camera-stream');
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width; canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, img.width, img.height);
+    return canvas.toDataURL('image/jpeg');
+  }
+
+  function showModal(img, emp_id, name) {
+    document.getElementById('modal-img').src = img;
+    document.getElementById('modal-empinfo').innerText = `Emp ID: ${emp_id}\nName: ${name}`;
+    document.getElementById('modal-bg').style.display = "flex";
+  }
+  function closeModal() { document.getElementById('modal-bg').style.display = "none"; }
+
+  // --- FINGERPRINT REGISTRATION ---
+  async function registerFingerprint() {
+    const emp_id = empField.value.trim();
+    const name   = nameField.value.trim();
+    if (!emp_id) { document.getElementById('result-msg').innerText = "Please provide Employee ID."; return; }
+
+    const ok = await upsertUser(); if (!ok) return; // ensure role saved
+    document.getElementById('result-msg').innerText = "Place your finger on the sensor...";
+
+    const res = await fetch('/api/finger_register', {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({user_id: emp_id, username: name})
+    });
+    const data = await res.json();
+    document.getElementById('result-msg').innerText = data.message;
+  }
+
+  // --- RFID REGISTRATION ---
+  async function registerRFID() {
+    const emp_id = empField.value.trim();
+    const name   = nameField.value.trim();
+    if (!emp_id) { document.getElementById('result-msg').innerText = "Please provide Employee ID."; return; }
+
+    const ok = await upsertUser(); if (!ok) return; // ensure role saved
+    document.getElementById('result-msg').innerText = "Scan RFID card/tag near reader...";
+
+    const res = await fetch('/api/rfid_register', {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({employee_id: emp_id, name})
+    });
+    const data = await res.json();
+    document.getElementById('result-msg').innerText = data.message;
+  }
+
+  window.onload = () => { validateFields(); }
+</script>
+{% endblock %}

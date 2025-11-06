@@ -1,0 +1,42 @@
+:root {
+  --is-inset-right: 36px;   /* distance from right edge */
+  --is-width: 22px;         /* scrollbar thickness */
+  --is-radius: 12px;        /* corner radius */
+  --is-track-bg: rgba(0,0,0,0.06);
+  --is-thumb-bg: #bfbfbf;
+  --is-min-thumb: 48px;     /* min thumb height for touch */
+}
+
+/* Optional: if you want body itself not to scroll */
+.is-lock-body {
+  overflow: hidden !important;
+}
+
+/* The floating track (one per scroll area) */
+.is-track {
+  position: fixed;
+  right: var(--is-inset-right);
+  width: var(--is-width);
+  top: 0;                   /* JS positions to header bottom */
+  height: 100vh;            /* JS computes exact height */
+  z-index: 9999;
+  display: none;            /* shown only when content overflows */
+  background: var(--is-track-bg);
+  border-radius: var(--is-radius);
+  box-sizing: border-box;
+}
+
+/* The draggable thumb */
+.is-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 0;
+  height: 80px;            /* JS adjusts */
+  background: var(--is-thumb-bg);
+  border-radius: calc(var(--is-radius) - 2px);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  cursor: grab;
+  touch-action: none;       /* precise drag on touch */
+}
+.is-thumb:active { cursor: grabbing; }

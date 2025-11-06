@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- Your OSK styles -->
+  <link rel="stylesheet" href="/static/css/osk.css">
+  <!-- SimpleKeyboard core CSS (needed by your OSK) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/css/index.css"/>
+
+  <style>
+    :root{
+      /* Inset custom scrollbar */
+      --sb-inset-right: 36px;
+      --sb-width: 22px;
+      --sb-radius: 12px;
+      --sb-track: rgba(0,0,0,0.06);
+      --sb-thumb: #bfbfbf;
+      --sb-min-thumb: 48px;
+    }
+
+    body { background:#f9f6ef; margin:0; }
+
+    /* ---- Shared header (same as your other pages) ---- */
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:18px 38px 0; min-height:60px; box-sizing:border-box;
+    }
+    .logo-main{ height:44px; display:block; }
+    .logo-right{ height:30px; display:block; }
+    .menu-back-btn{
+      background:#eee; color:#205081; padding:9px 18px; font-size:1rem;
+      border:none; border-radius:8px; font-weight:600; cursor:pointer;
+      transition:background .16s; min-width:92px; margin-right:12px;
+    }
+    .menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+    /* Scrollable page body (everything below header) */
+    .scroll-area{
+      position:relative;
+      width:100%;
+      height:calc(100vh - 90px);
+      overflow-y:auto;
+      overscroll-behavior:contain;
+    }
+
+    .form-section{
+      background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,0.10);
+      max-width:420px; margin:36px auto 0; padding:36px 36px 28px; text-align:center;
+    }
+    h2 { color:#205081; font-weight:700; margin-bottom:16px; }
+    input, select {
+      padding:10px 16px; font-size:1.05rem; border-radius:7px; border:1.5px solid #eee;
+      width:220px; margin-bottom:10px;
+    }
+    .btn { margin-top:6px; padding:12px 32px; font-size:1rem; font-weight:600; border:none; border-radius:8px; cursor:pointer; }
+    .btn-main { background:#205081; color:#fff; }
+    .btn-main:hover { background:#ffa500; }
+    .btn-secondary { background:#e9eef7; color:#205081; }
+    .btn-danger { background:#b00020; color:#fff; }
+    .msg { margin-top:12px; font-size:1.02rem; color:#205081; min-height:1.2em; }
+    .msg.ok { color:#0c7a3e; }
+    .msg.err { color:#b00020; }
+
+    #volume-slider{ accent-color:#205081; }
+    #volume-value{ color:#205081; }
+
+    /* Inset custom scrollbar UI */
+    .sb-track{
+      position:fixed; right:var(--sb-inset-right); width:var(--sb-width);
+      top:90px; height:calc(100vh - 90px); z-index:9998;
+      background:var(--sb-track); border-radius:var(--sb-radius); box-sizing:border-box;
+      display:none;
+    }
+    .sb-thumb{
+      position:absolute; left:2px; right:2px; top:0;
+      height:80px; background:var(--sb-thumb); border-radius:calc(var(--sb-radius) - 2px);
+      box-shadow:0 1px 2px rgba(0,0,0,0.25);
+      cursor:grab; touch-action:none;
+    }
+    .sb-thumb:active{ cursor:grabbing; }
+
+    /* Small helper layout for field rows in DB section */
+    .row { display:flex; flex-direction:column; align-items:center; gap:8px; }
+    .row.inline { flex-direction:row; justify-content:center; flex-wrap:wrap; gap:10px; }
+    .w-220 { width:220px; }
+
+    /* Version pill */
+    .version-pill{
+      display:inline-flex; align-items:center; gap:8px;
+      background:#e9eef7; color:#205081; border-radius:999px;
+      padding:8px 14px; font-weight:700; font-size:1rem;
+    }
+    .version-pill .dot{
+      width:10px; height:10px; border-radius:50%; background:#0c7a3e;
+      box-shadow:0 0 0 3px #0c7a3e22;
+    }
+    .power-row{ display:flex; justify-content:center; gap:12px; flex-wrap:wrap; margin-top:10px; }
+  </style>
+</head>
+<body>
+  <!-- Header (same pattern as Register/Import/Export pages) -->
+  <div class="header" id="pageHeader">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'">← Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <!-- Scrollable page content -->
+  <div class="scroll-area" id="scrollArea">
+
+    <!-- SOFTWARE INFO + POWER (NEW) -->
+    <div class="form-section">
+      <h2>Software</h2>
+      <div id="version-box" class="version-pill" title="Current software version">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Version:</span>
+        <span id="sw-version">—</span>
+      </div>
+      <div class="power-row">
+        <button class="btn btn-secondary" onclick="rebootDevice()"><i class="fa fa-rotate-right"></i> Restart Device</button>
+        <button class="btn btn-danger" onclick="shutdownDevice()"><i class="fa fa-power-off"></i> Shutdown</button>
+      </div>
+      <div class="msg" id="power-msg"></div>
+    </div>
+
+    <!-- VOLUME -->
+    <div class="form-section">
+      <h2>Adjust Volume</h2>
+      <input type="range" id="volume-slider" min="0" max="100" value="100" style="width:220px;">
+      <span id="volume-value" style="font-size:1.14rem;font-weight:600;margin-left:14px;">100</span>%
+      <button class="btn btn-main" onclick="saveVolume()" style="margin-left:14px;">Set Volume</button>
+      <div class="msg" id="volume-msg"></div>
+    </div>
+
+    <!-- PASSWORD -->
+    <div class="form-section">
+      <h2>Change Admin Password</h2>
+      <form id="pw-form" autocomplete="off" onsubmit="return changePassword(event)">
+        <input type="password" id="current_password" placeholder="Current Password" required autocomplete="off" enterkeyhint="done"><br>
+        <input type="password" id="admin_password" placeholder="New Password" required autocomplete="off" enterkeyhint="done"><br>
+        <input type="password" id="admin_password_confirm" placeholder="Re-type New Password" required autocomplete="off" enterkeyhint="done"><br>
+        <button class="btn btn-main" type="submit"><i class="fa fa-save"></i> Update Password</button>
+      </form>
+      <div class="msg" id="pw-msg"></div>
+    </div>
+
+    <!-- WIFI -->
+    <div class="form-section" style="margin-bottom:16px;">
+      <h2>Wi-Fi Settings</h2>
+      <form id="wifi-form" onsubmit="return saveWiFi(event)">
+        <div><select id="wifi_ssid" required class="w-220"></select></div>
+        <div class="row inline">
+          <input type="password" id="wifi_password" placeholder="Wi-Fi Password" required autocomplete="off" enterkeyhint="done" class="w-220">
+          <button class="btn btn-main" type="submit"><i class="fa fa-wifi"></i> Save</button>
+        </div>
+      </form>
+      <div class="msg" id="wifi-msg"></div>
+    </div>
+
+    <!-- DB CONFIG -->
+    <div class="form-section" id="db-config" style="margin-bottom:16px;">
+      <h2>Database Configuration</h2>
+      <div class="row">
+        <input id="db_host" type="text" placeholder="Host (e.g., 192.168.1.3)" class="w-220">
+        <input id="db_port" type="number" placeholder="Port (e.g., 5432)" class="w-220">
+        <input id="db_name" type="text" placeholder="Database name (e.g., postgres)" class="w-220">
+        <input id="db_user" type="text" placeholder="User (e.g., postgres)" class="w-220">
+        <div class="row inline">
+          <input id="db_pass" type="password" placeholder="Password (optional)" class="w-220">
+          <button class="btn btn-secondary" type="button" onclick="toggleDbPass()">
+            <i class="fa fa-eye"></i> Show
+          </button>
+        </div>
+      </div>
+      <div class="row inline" style="margin-top:8px;">
+        <button class="btn btn-secondary" type="button" onclick="testDb()"><i class="fa fa-plug"></i> Test Connection</button>
+        <button class="btn btn-main" type="button" onclick="saveDb()"><i class="fa fa-save"></i> Save</button>
+      </div>
+      <div class="msg" id="db-msg"></div>
+      <div class="msg" id="db-current" style="font-size:.95rem; color:#555;"></div>
+    </div>
+
+    <!-- DEVICE ID -->
+    <div class="form-section" id="device-config" style="margin-bottom:16px;">
+      <h2>Device ID</h2>
+      <form onsubmit="return saveDeviceId(event)">
+        <div class="row inline">
+          <input id="device_id" type="text" placeholder="CANT_A_001" class="w-220" autocomplete="off" enterkeyhint="done">
+          <button class="btn btn-main" type="submit"><i class="fa fa-save"></i> Save</button>
+        </div>
+        <div style="font-size:.9rem; color:#666; margin-top:6px;">
+          Format: <code>CANT_<b>A</b>_<b>001</b></code> (one letter after CANT_, underscore, three digits)
+        </div>
+      </form>
+      <div class="msg" id="dev-msg"></div>
+      <div class="msg" id="dev-current" style="font-size:.95rem; color:#555;"></div>
+    </div>
+
+    <!-- DAYS ALLOWED (NEW) -->
+    <div class="form-section" id="days-allowed-section" style="margin-bottom:40px;">
+      <h2>Days Allowed (consecutive)</h2>
+      <form onsubmit="return saveDaysAllowed(event)">
+        <div class="row inline">
+          <input id="days_allowed" type="number" min="0" step="1" placeholder="e.g. 3" class="w-220" inputmode="numeric" enterkeyhint="done">
+          <button class="btn btn-main" type="submit"><i class="fa fa-save"></i> Save</button>
+        </div>
+        <div style="font-size:.9rem; color:#666; margin-top:6px;">
+          If set to <b>N</b>, a user can log in for <b>N</b> consecutive days. On day <b>N+1</b>, login is blocked until they miss a day.
+        </div>
+      </form>
+      <div class="msg" id="days-msg"></div>
+    </div>
+  </div>
+
+  <!-- Inset custom scrollbar -->
+  <div class="sb-track" id="sbTrack"><div class="sb-thumb" id="sbThumb"></div></div>
+
+  <!-- Mount node for YOUR keyboard (required by your osk.js) -->
+  <div id="osk" class="simple-keyboard hg-theme-default"></div>
+
+  <!-- simple-keyboard core JS (must load BEFORE your osk.js) -->
+  <script src="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/index.js"></script>
+  <!-- Your OSK logic -->
+  <script src="/static/js/osk.js"></script>
+
+  <script>
+  /* ===== Small helpers ===== */
+  function setMsg(elId, text, ok=null){
+    const el = document.getElementById(elId);
+    if(!el) return;
+    el.textContent = text || "";
+    el.classList.remove("ok","err");
+    if (ok === true) el.classList.add("ok");
+    if (ok === false) el.classList.add("err");
+  }
+
+  /* ===== Version + Power (NEW) ===== */
+  async function loadVersion(){
+    try{
+      const r = await fetch('/api/version');
+      const j = await r.json();
+      document.getElementById('sw-version').textContent = (j && j.version) ? j.version : '—';
+    }catch(e){
+      document.getElementById('sw-version').textContent = '—';
+    }
+  }
+
+  async function rebootDevice(){
+    if(!confirm("Restart the device now?")) return;
+    setMsg('power-msg', 'Restarting device...');
+    try{
+      const r = await fetch('/api/reboot', {method:'POST'});
+      const j = await r.json().catch(()=>({}));
+      setMsg('power-msg', (j && j.message) ? j.message : 'Restart command sent', true);
+    }catch(e){
+      setMsg('power-msg', 'Failed to send restart', false);
+    }
+  }
+
+  async function shutdownDevice(){
+    if(!confirm("Shutdown the device now?")) return;
+    setMsg('power-msg', 'Shutting down device...');
+    try{
+      const r = await fetch('/api/shutdown', {method:'POST'});
+      const j = await r.json().catch(()=>({}));
+      setMsg('power-msg', (j && j.message) ? j.message : 'Shutdown command sent', true);
+    }catch(e){
+      setMsg('power-msg', 'Failed to send shutdown', false);
+    }
+  }
+
+  /* ===== Volume ===== */
+  const volumeSlider = document.getElementById('volume-slider');
+  const volumeValue  = document.getElementById('volume-value');
+  const volumeMsg    = document.getElementById('volume-msg');
+  if (volumeSlider) volumeSlider.oninput = () => (volumeValue.textContent = volumeSlider.value);
+
+  window.addEventListener('DOMContentLoaded', () => {
+    fetchWiFiNetworks();
+
+    // Load version & volume
+    loadVersion();
+    fetch('/api/get_volume').then(r=>r.json()).then(data=>{
+      if (data.success) {
+        volumeSlider.value = data.volume;
+        volumeValue.textContent = data.volume;
+      }
+    });
+
+    loadDbDefaults();
+    loadDeviceId();
+
+    // NEW: load Days Allowed
+    loadDaysAllowed();
+
+    initInsetScroll(); // start inset scrollbar
+  });
+
+  async function saveVolume(){
+    setMsg('volume-msg', 'Setting volume...');
+    const resp = await fetch("/api/set_volume", {
+      method:"POST", headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({volume: volumeSlider.value})
+    });
+    const data = await resp.json();
+    setMsg('volume-msg', data.message, !!data.success);
+  }
+
+  /* ===== Password ===== */
+  async function changePassword(e){
+    e.preventDefault();
+    setMsg('pw-msg', 'Updating password...');
+    const current_password = document.getElementById('current_password').value;
+    const new_password = document.getElementById('admin_password').value;
+    const confirm_password = document.getElementById('admin_password_confirm').value;
+    const resp = await fetch('/api/change_password', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ current_password, new_password, confirm_password })
+    });
+    const data = await resp.json();
+    setMsg('pw-msg', data.message, !!data.success);
+    return false;
+  }
+
+  /* ===== WiFi ===== */
+  async function fetchWiFiNetworks(){
+    const res = await fetch('/api/wifi_scan');
+    const networks = await res.json();
+    const ssidList = document.getElementById('wifi_ssid');
+    ssidList.innerHTML = "";
+    networks.forEach(ssid=>{
+      const opt = document.createElement('option');
+      opt.value = opt.text = ssid;
+      ssidList.add(opt);
+    });
+  }
+  async function saveWiFi(e){
+    e.preventDefault();
+    setMsg('wifi-msg', 'Saving Wi-Fi...');
+    const ssid = document.getElementById('wifi_ssid').value;
+    const password = document.getElementById('wifi_password').value;
+    const resp = await respFetch('/api/wifi_save', {ssid, password});
+    setMsg('wifi-msg', resp.message, !!resp.success);
+    return false;
+  }
+  async function respFetch(url, body){
+    const r = await fetch(url, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body||{})
+    });
+    return r.json();
+  }
+
+  /* ===== DB CONFIG ===== */
+  function toggleDbPass(){
+    const p = document.getElementById('db_pass');
+    if (!p) return;
+    p.type = (p.type === 'password') ? 'text' : 'password';
+  }
+
+  async function loadDbDefaults(){
+    try{
+      const r = await fetch('/api/db_config');
+      const cfg = await r.json();
+      document.getElementById('db_host').value = cfg.host || '';
+      document.getElementById('db_port').value = cfg.port || 5432;
+      document.getElementById('db_name').value = cfg.dbname || 'postgres';
+      document.getElementById('db_user').value = cfg.user || 'postgres';
+      document.getElementById('db_pass').value = cfg.password || '';
+      setMsg('db-current', `Current: ${cfg.user}@${cfg.host}:${cfg.port}/${cfg.dbname}`);
+    }catch(e){
+      setMsg('db-msg', 'Failed to load DB config', false);
+    }
+  }
+
+  async function testDb(){
+    setMsg('db-msg', 'Testing connection...');
+    const payload = {
+      host: document.getElementById('db_host').value.trim(),
+      port: document.getElementById('db_port').value.trim(),
+      dbname: document.getElementById('db_name').value.trim(),
+      user: document.getElementById('db_user').value.trim(),
+      password: document.getElementById('db_pass').value
+    };
+    const j = await respFetch('/api/db_test', payload);
+    setMsg('db-msg', j.message || (j.success ? 'OK' : 'Failed'), !!j.success);
+  }
+
+  async function saveDb(){
+    setMsg('db-msg', 'Saving configuration...');
+    const payload = {
+      host: document.getElementById('db_host').value.trim(),
+      port: document.getElementById('db_port').value.trim(),
+      dbname: document.getElementById('db_name').value.trim(),
+      user: document.getElementById('db_user').value.trim(),
+      password: document.getElementById('db_pass').value
+    };
+    const j = await respFetch('/api/db_config', payload);
+    setMsg('db-msg', j.message || (j.success ? 'Saved' : 'Failed'), !!j.success);
+    if (j.config){
+      setMsg('db-current', `Current: ${j.config.user}@${j.config.host}:${j.config.port}/${j.config.dbname}`);
+    }
+  }
+
+  /* ===== DEVICE ID ===== */
+  function validateDeviceId(v){
+    return /^CANT_[A-Z]_[0-9]{3}$/.test((v || '').trim().toUpperCase());
+  }
+
+  async function loadDeviceId(){
+    try{
+      const r = await fetch('/api/device_id');
+      const j = await r.json();
+      const val = (j && j.device_id) ? j.device_id : 'CANT_A_001';
+      document.getElementById('device_id').value = val;
+      setMsg('dev-current', `Current Device ID: ${val}`);
+    }catch(e){
+      setMsg('dev-msg', 'Failed to load Device ID', false);
+    }
+  }
+
+  async function saveDeviceId(e){
+    if (e) e.preventDefault();
+    const input = document.getElementById('device_id');
+    const did = (input.value || '').trim().toUpperCase();
+    if (!validateDeviceId(did)){
+      setMsg('dev-msg', 'Format must be CANT_A_001 (one letter after CANT_, underscore, three digits).', false);
+      input.focus();
+      return false;
+    }
+    setMsg('dev-msg', 'Saving...');
+    const j = await respFetch('/api/device_id', { device_id: did });
+    setMsg('dev-msg', j.message || (j.success ? 'Saved' : 'Failed'), !!j.success);
+    if (j.success){
+      setMsg('dev-current', `Current Device ID: ${j.device_id}`);
+    }
+    return false;
+  }
+
+  /* ===== DAYS ALLOWED (NEW) ===== */
+  function clampInt(v){
+    if (v === null || v === undefined) return 0;
+    const n = parseInt(String(v).replace(/[^0-9\-]/g,''), 10);
+    if (isNaN(n) || n < 0) return 0;
+    return n;
+  }
+
+  async function loadDaysAllowed(){
+    try{
+      const r = await fetch('/api/days_allowed');
+      const j = await r.json();
+      if (j && j.success){
+        const n = clampInt(j.days_allowed);
+        document.getElementById('days_allowed').value = n;
+      }
+    }catch(e){
+      setMsg('days-msg', 'Failed to load Days allowed', false);
+    }
+  }
+
+  async function saveDaysAllowed(e){
+    if (e) e.preventDefault();
+    const raw = document.getElementById('days_allowed').value;
+    const n = clampInt(raw);
+    setMsg('days-msg', 'Saving...');
+    try{
+      const j = await respFetch('/api/days_allowed', { days_allowed: n });
+      setMsg('days-msg', j.message || (j.success ? 'Saved' : 'Failed'), !!j.success);
+    }catch(err){
+      setMsg('days-msg', 'Failed to save Days allowed', false);
+    }
+    return false;
+  }
+
+  // Prevent non-numeric keystrokes (extra guard on some on-screen keyboards)
+  document.addEventListener('DOMContentLoaded', ()=>{
+    const da = document.getElementById('days_allowed');
+    if (da){
+      da.addEventListener('keypress', (e)=>{
+        const ch = String.fromCharCode(e.which || e.keyCode);
+        if (!/[0-9]/.test(ch)) e.preventDefault();
+      });
+      da.addEventListener('input', ()=>{
+        da.value = String(clampInt(da.value));
+      });
+    }
+  });
+
+  /* ===== Inset Scrollbar (draggable, inside bezel) ===== */
+  function initInsetScroll(){
+    const area  = document.getElementById('scrollArea');
+    const head  = document.getElementById('pageHeader');
+    const track = document.getElementById('sbTrack');
+    const thumb = document.getElementById('sbThumb');
+    if (!area) return;
+
+    let dragging=false, startY=0, startScrollTop=0;
+    const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+    function layout(){
+      const hb = Math.ceil(head.getBoundingClientRect().bottom);
+      const h  = window.innerHeight - hb;
+      track.style.top = hb + 'px';
+      track.style.height = h + 'px';
+      area.style.height = h + 'px';
+      toggleTrack(); refreshThumb();
+    }
+    function toggleTrack(){
+      if (area.scrollHeight > area.clientHeight + 1) track.style.display = 'block';
+      else track.style.display = 'none';
+    }
+    function refreshThumb(){
+      const trackH = track.clientHeight;
+      const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
+      const ratio = area.clientHeight / (area.scrollHeight || 1);
+      const minH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sb-min-thumb')) || 48;
+      let th = Math.round(trackH * ratio);
+      th = clamp(th, minH, trackH);
+      thumb.style.height = th + 'px';
+      const maxTop = trackH - th;
+      const t = maxScroll ? (area.scrollTop / maxScroll) * maxTop : 0;
+      thumb.style.transform = 'translateY(' + t + 'px)';
+    }
+
+    thumb.addEventListener('pointerdown', e=>{
+      dragging=true; thumb.setPointerCapture(e.pointerId);
+      startY=e.clientY; startScrollTop=area.scrollTop; e.preventDefault();
+    });
+    function endDrag(e){ if(!dragging) return; dragging=false; try{ thumb.releasePointerCapture(e.pointerId);}catch(_){ } }
+    thumb.addEventListener('pointerup', endDrag);
+    thumb.addEventListener('pointercancel', endDrag);
+    thumb.addEventListener('lostpointercapture', ()=> dragging=false);
+    thumb.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      const trackH = track.clientHeight;
+      const th = thumb.offsetHeight;
+      const maxTop = Math.max(1, trackH - th);
+      const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight);
+      const dY = e.clientY - startY;
+      const perPixel = maxScroll / maxTop;
+      area.scrollTop = clamp(startScrollTop + dY * perPixel, 0, maxScroll);
+    });
+
+    track.addEventListener('pointerdown', e=>{
+      if (e.target !== track) return;
+      const rect = track.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      const th = thumb.offsetHeight;
+      const trackH = track.clientHeight;
+      const maxTop = Math.max(1, trackH - th);
+      const maxScr = Math.max(1, area.scrollHeight - area.clientHeight);
+      const tgtTop = clamp(clickY - th/2, 0, maxTop);
+      area.scrollTop = (tgtTop / maxTop) * maxScr;
+    });
+
+    area.addEventListener('scroll', refreshThumb, { passive:true });
+    window.addEventListener('resize', layout);
+    window.addEventListener('load', layout);
+    setTimeout(layout, 300);
+  }
+  </script>
+</body>
+</html>

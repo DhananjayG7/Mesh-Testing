@@ -1,0 +1,995 @@
+{% extends "base.html" %}
+{% block title %}User Registration{% endblock %}
+
+{% block page_css %}
+/* ----- Global background & fonts ----- */
+html, body{
+  height:100%;
+  margin:0;
+  background:#f9f6ef;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  overflow:hidden; /* prevent double scroll; .page-shell handles scrolling */
+}
+
+/* Mobile-like touch scroll container (no visible bar) */
+.page-shell{
+  height:100%;
+  overflow-y:auto;          /* enable vertical scroll */
+  overflow-x:hidden;
+  -webkit-overflow-scrolling: touch; /* inertial */
+  touch-action: pan-y;               /* finger drag */
+  overscroll-behavior: contain;      /* no chain/bounce */
+}
+.page-shell::-webkit-scrollbar{ width:0; height:0; } /* hide in Chromium/WebKit */
+.page-shell{ scrollbar-width:none; }                  /* hide in Firefox */
+
+/* Header */
+.header {
+  position:sticky; top:0; z-index:50;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 38px 0; min-height:60px; box-sizing:border-box;
+  background:#f9f6ef;
+}
+.logo-main{ height:44px; display:block; }
+.logo-right{ height:34px; display:block; }
+.menu-back-btn{ background:#eee; color:#205081; padding:9px 18px; font-size:1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background .16s; min-width:92px; margin-right:12px; }
+.menu-back-btn:hover{ background:#ffa500; color:#fff; }
+
+/* ======= ADMIN LOGIN STAGE ======= */
+:root{ --hdrH:72px; }
+.stage{
+  position:fixed; left:0; right:0; top:var(--hdrH); bottom:0;
+  display:flex; align-items:center; justify-content:center;
+  padding:18px; box-sizing:border-box;
+  z-index: 10;
+}
+.panel{ display:none; width:100%; height:100%; }
+.panel.show{ display:flex; align-items:center; justify-content:center; }
+.live-card{
+  position:relative;
+  width:min(520px, 96vw);
+  aspect-ratio: 3/4;
+  border-radius:16px; overflow:hidden;
+  background:#000;
+  box-shadow:0 10px 28px rgba(32,80,129,.18);
+  border:4px solid #eef2f7;
+  display:flex; align-items:center; justify-content:center;
+}
+#live-video{
+  position:absolute; inset:0;
+  width:100%; height:100%; object-fit:cover; display:block;
+}
+.top-actions{ position:absolute; right:10px; top:10px; display:flex; gap:8px; z-index:20; }
+.ghost{ background:transparent; color:#667a94; border:1px dashed #cfd8e3; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.ghost:hover{ color:#205081; border-color:#20508155; }
+
+/* Bottom banner (success/fail) */
+.banner{
+  position:fixed; left:0; right:0; bottom:0;
+  height:30vh; min-height:180px; max-height:360px;
+  background: transparent;
+  transform: translateY(110%);
+  transition: transform .18s ease;
+  z-index: 9999;
+  display:flex; align-items:center; justify-content:center;
+  pointer-events:none; padding: 10px; will-change: transform;
+}
+.banner.show{ transform: translateY(0); }
+.banner-card{
+  width:min(1100px, 96vw);
+  background: rgba(255,255,255,0.98);
+  border-radius:18px; box-shadow:0 10px 28px rgba(0,0,0,0.25);
+  display:flex; align-items:center; gap:16px; padding:14px 16px;
+  pointer-events:auto;
+}
+.banner .avatar{
+  width:72px; height:72px; border-radius:50%; overflow:hidden; border:4px solid #eef2f7; background:#f2f2f2;
+  display:flex; align-items:center; justify-content:center; flex:0 0 72px;
+}
+.banner .avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
+.banner .avatar.fail{ background:#ffebee; border-color:#ffd6db; color:#b02a37; font-size:34px; }
+.banner .ok{ color:#157347; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+.banner .fail{ color:#b02a37; font-weight:900; margin-bottom:4px; font-size:1.1rem; }
+.banner .sub{ color:#205081; white-space:pre-line; font-size:1rem; }
+
+/* ======= REGISTRATION FORM ======= */
+.container { background:#fff; border-radius:16px; box-shadow:0 4px 18px rgba(32,80,129,.10); max-width:480px; margin:20px auto 24px; padding:36px 38px 32px; position:relative; }
+h2 { color:#205081; text-align:center; margin-bottom:18px; }
+label { font-weight:bold; display:block; color:#205081; }
+input, select { padding:10px 16px; font-size:1.05rem; border-radius:7px; border:1.5px solid #eee; width:100%; margin-bottom:14px; box-sizing:border-box; color:#2D4668; }
+input[disabled]{ background:#f6f8fb; color:#90A0B3; }
+.req::after{ content:" *"; color:#C0342D; }
+
+button { margin:7px 0; padding:13px 22px; font-size:1.04rem; font-weight:600; border:none; border-radius:8px; background:#ffa500; color:#fff; cursor:pointer; }
+button:disabled { opacity:.65; cursor:not-allowed; }
+button:hover:enabled { background:#ff7c00; }
+
+.actions { display:flex; flex-direction:column; gap:10px; margin:18px 0 10px; }
+.result { margin-top:10px; font-size:1.05rem; color:#205081; min-height:26px; text-align:center; }
+
+.pill { position:absolute; right:18px; top:12px; background:#EEF3F9; color:#205081; border:1px solid #E6EBF2; border-radius:999px; font-size:.86rem; padding:6px 10px; }
+
+/* Modals */
+.modal-bg { display:none; position:fixed; z-index:9999; left:0; top:0; width:100vw; height:100vh; background:rgba(38,62,94,.25); justify-content:center; align-items:center; padding:16px; }
+.modal-box {
+  background:#fff; border-radius:18px; box-shadow:0 6px 26px #20508125; padding:20px 22px 16px;
+  width:min(820px, 96vw); text-align:center; position:relative; border:1px solid #E6EBF2;
+  max-height:92vh; overflow-y:auto;
+}
+
+/* Portrait live area in modal (face capture) */
+.live-box { position: relative; width: min(520px, 96vw); aspect-ratio: 3 / 4; margin: 0 auto 10px; }
+#camera-stream{ position:absolute; inset:0; z-index:1; border-radius:11px; border:5px solid #eee; width:100%; height:100%; object-fit:cover; }
+#camera-canvas{ position:absolute; inset:0; z-index:2; }
+
+.instructions { text-align:center; color:#666; margin-top:6px; min-height:22px; font-size:1.02rem; font-weight:600; }
+
+/* Fingerprint modal */
+.fp-icon{ width:120px; height:120px; margin:12px auto 8px; background:url('/static/img/fingerprint_icon.png') center/contain no-repeat; opacity:.95; }
+.status{ font-size:1rem; color:#444; min-height:24px; }
+
+/* Utility */
+.hidden{ display:none !important; }
+.row { display:flex; gap:10px; }
+.row > * { flex:1; }
+
+/* --- User picker dropdown --- */
+.user-picker-wrap{ position:relative; }
+#user-count{
+  position:absolute; right:0; top:-28px;
+  background:#EEF3F9; color:#205081; border:1px solid #E6EBF2;
+  border-radius:999px; font-size:.86rem; padding:4px 10px; white-space:nowrap;
+}
+#user-list{
+  position:absolute; left:0; right:0; top:100%;
+  background:#fff; border:1px solid #E6EBF2; border-radius:10px;
+  box-shadow:0 12px 28px rgba(32,80,129,.14);
+  max-height:192px; overflow:auto; z-index:50; display:none; margin-top:6px;
+}
+#user-list.show{ display:block; }
+#user-list .li{
+  padding:10px 12px; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:8px;
+}
+#user-list .li:hover{ background:#f6f9ff; }
+#user-list .id{ font-weight:700; color:#205081; min-width:72px; }
+#user-list .nm{ color:#4a6487; font-size:.95rem; flex:1; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#user-list .meta{ display:flex; gap:8px; align-items:center; color:#546a88; font-size:.84rem; }
+#user-list .pill{ background:#eef3f9; color:#205081; font-size:.78rem; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+
+/* ====== Admin Password Modal + OSK ====== */
+.pw-grid{ display:flex; flex-direction:column; gap:10px; align-items:center; }
+.pw-wrap{
+  position:relative;
+  width:min(340px, 86vw);
+}
+.pw-input{
+  width:100%;
+  padding:12px 44px 12px 14px; /* space for eye icon */
+  font-size:1.1rem;
+  border:1.5px solid #E6EBF2; border-radius:10px;
+}
+.pw-eye{
+  position:absolute; right:10px; top:50%; transform:translateY(-50%);
+  background:transparent; border:none; cursor:pointer;
+  color:#205081; font-size:1.1rem; padding:6px;
+}
+.pw-actions{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+.simple-keyboard{ max-width:min(560px, 96vw); margin:6px auto 0; }
+#osk-wrap{ position:relative; z-index:10000; }
+{% endblock %}
+
+{% block body %}
+<div class="page-shell">
+  <!-- Header -->
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'">← Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+
+  <!-- ===== ADMIN LOGIN STAGE ===== -->
+  <div class="stage" id="login-stage">
+    <div class="panel show" id="panel-face">
+      <div class="live-card">
+        <div class="top-actions">
+          <button class="ghost" id="pwBtn">Use Password</button>
+        </div>
+        <img id="live-video" src="/video_feed" alt="Live camera" crossorigin="anonymous">
+      </div>
+    </div>
+  </div>
+
+  <!-- Success / fail banner -->
+  <div class="banner" id="banner" aria-live="polite" aria-atomic="true">
+    <div class="banner-card">
+      <div class="avatar" id="banner-avatar"></div>
+      <div class="lines">
+        <div class="ok"   id="banner-title-ok"   style="display:none;">Admin verified</div>
+        <div class="fail" id="banner-title-fail" style="display:none;">Access denied</div>
+        <div class="sub"  id="banner-sub"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== REGISTRATION FORM (with user picker) ===== -->
+  <div id="formWrapper" class="hidden">
+    <div class="container" id="formContainer">
+      <span class="pill" id="clock">--:--:--</span>
+      <h2>Register User</h2>
+
+      <label class="req" for="emp_id">Employee ID</label>
+      <div class="user-picker-wrap">
+        <input id="emp_id" type="text" inputmode="text" autocomplete="off" placeholder="Start typing Emp ID or Name">
+        <span id="user-count">0 users</span>
+        <div id="user-list" role="listbox" aria-label="Users"></div>
+      </div>
+
+      <label class="req" for="name">Name</label>
+      <input id="name" type="text" autocomplete="off" placeholder="Enter Name">
+
+      <label class="req" for="role">Role</label>
+      <select id="role">
+        <option>User</option>
+        <option>Admin</option>
+        <option>Super Admin</option>
+      </select>
+
+      <label for="birthdate">Birthdate</label>
+      <!-- Numeric OSK + auto-format YYYY-MM-DD -->
+      <input id="birthdate" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" maxlength="10" autocomplete="off">
+
+      <div class="row">
+        <div>
+          <label for="rfid_uid">RFID UID</label>
+          <input id="rfid_uid" disabled>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="faceBtn" disabled>Register Face</button>
+        <button id="fingerBtn" disabled>Register Fingerprint</button>
+        <button id="rfidBtn" disabled>Register RFID Card</button>
+        <button onclick="window.location.href='/menu'">Done → Menu</button>
+      </div>
+
+      <div class="result" id="result-msg"></div>
+    </div>
+
+    <!-- Face modal -->
+    <div class="modal-bg" id="face-modal">
+      <div class="modal-box">
+        <header>Face Capture</header>
+        <div class="live-box">
+          <img id="camera-stream" src="/video_feed" alt="" crossorigin="anonymous">
+          <canvas id="camera-canvas"></canvas>
+        </div>
+        <div class="instructions" id="faceInstructions">Align your face inside the green box…</div>
+        <div class="btn-row" style="margin-top:10px;">
+          <button class="btn-secondary" id="faceCancelBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fingerprint modal -->
+    <div class="modal-bg" id="fp-modal">
+      <div class="modal-box">
+        <header>Fingerprint Enrollment</header>
+        <div class="fp-icon" aria-hidden="true"></div>
+        <div class="status" id="fingerStatus">Place your finger on the sensor…</div>
+        <div class="btn-row">
+          <button class="btn-secondary" id="fpCloseBtn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Duplicate face modal -->
+    <div class="modal-bg" id="dup-modal">
+      <div class="modal-box">
+        <header>Duplicate Face Detected</header>
+        <img id="modal-img" src="" alt="Existing face" style="width:120px;height:120px;border-radius:11px;border:3px solid #eee;margin:8px auto 0;">
+        <div class="emp-info" id="modal-empinfo"></div>
+        <div class="msg" id="modal-msg">Face already registered!</div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="closeModal('dup-modal')">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Duplicate RFID/Fingerprint modal (shared) -->
+    <div class="modal-bg" id="dup-generic-modal">
+      <div class="modal-box">
+        <header id="dup-generic-title">Duplicate Found</header>
+        <div id="dup-generic-body" style="margin:8px 0 4px; white-space:pre-line;"></div>
+        <div class="btn-row">
+          <button class="btn-secondary" onclick="closeModal('dup-generic-modal')">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Admin Password Modal -->
+<div class="modal-bg" id="pw-modal" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+  <div class="modal-box">
+    <h3 id="pw-title" style="margin:0 0 8px;">Admin Password</h3>
+    <div class="pw-grid">
+      <div class="pw-wrap">
+        <input id="pw-input" type="password" class="pw-input" placeholder="Enter Admin Password" autocomplete="off" inputmode="none">
+        <button class="pw-eye" id="pw-eye" aria-label="Show password"><i class="fa fa-eye"></i></button>
+      </div>
+      <div class="pw-actions">
+        <button id="pw-submit">Verify</button>
+        <button class="btn-secondary" id="pw-cancel">Cancel</button>
+      </div>
+    </div>
+    <div id="osk-wrap" class="hidden"><div id="simple-keyboard"></div></div>
+    <div id="pw-msg" class="result" style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<!-- Birthdate Numeric Keyboard -->
+<div id="birth-osk-wrap" class="hidden" aria-hidden="true"
+     style="position:fixed; left:50%; transform:translateX(-50%);
+            bottom:12px; z-index:10000; background:#fff; border:1px solid #E6EBF2;
+            border-radius:14px; box-shadow:0 10px 24px rgba(0,0,0,.18);
+            padding:10px 12px;">
+  <div id="birth-keyboard"></div>
+  <div style="text-align:center; font-size:.9rem; color:#667a94; margin-top:6px;">
+    Format: <b>YYYY-MM-DD</b>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/css/index.css"/>
+<script src="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/index.js"></script>
+
+<script>
+/* ===================== CLOCK ===================== */
+const clockEl = document.getElementById('clock');
+function tick(){ if(clockEl) clockEl.textContent = new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:true}); }
+setInterval(tick, 1000); tick();
+
+/* =================== FLAGS & GLOBALS =================== */
+let adminUnlocked = false;
+let faceLoopActive = false, faceInFlight = false;
+let fingerPollRunning = false, rfidPollRunning = false;
+
+const liveImg = document.getElementById('live-video');
+const banner = document.getElementById('banner');
+const avatar = document.getElementById('banner-avatar');
+const okT    = document.getElementById('banner-title-ok');
+const failT  = document.getElementById('banner-title-fail');
+const subT   = document.getElementById('banner-sub');
+const loginStage = document.getElementById('login-stage');
+const formWrapper = document.getElementById('formWrapper');
+
+/* =================== BANNER =================== */
+function showBanner(success, sub, img){
+  avatar.className = 'avatar' + (success ? '' : ' fail');
+  avatar.innerHTML = success
+    ? (img ? `<img src="${img}">` : '<i class="fa fa-user-check" style="font-size:34px;"></i>')
+    : '<i class="fa fa-times"></i>';
+  okT.style.display = success ? 'block' : 'none';
+  failT.style.display = success ? 'none' : 'block';
+  subT.innerText = sub || '';
+  banner.classList.add('show');
+  setTimeout(()=> banner.classList.remove('show'), success ? 700 : 1100);
+}
+
+function unlockForm(){
+  if (adminUnlocked) return;
+  adminUnlocked = true;
+  faceLoopActive = false;
+  fingerPollRunning = false;
+  rfidPollRunning = false;
+  try{ sessionStorage.setItem('admin_ok','1'); }catch(_){}
+  loginStage.classList.add('hidden');
+  formWrapper.classList.remove('hidden');
+}
+
+/* =================== ADMIN LOGIN FLOWS =================== */
+async function faceLoop(){
+  if (adminUnlocked || faceLoopActive) return; 
+  faceLoopActive = true;
+
+  const probe = document.createElement('canvas'); probe.width=224; probe.height=168;
+  const ctx = probe.getContext('2d', { willReadFrequently:true });
+
+  while(faceLoopActive && !adminUnlocked){
+    if(faceInFlight){ await new Promise(r=>setTimeout(r, 40)); continue; }
+    if(!liveImg.complete || liveImg.naturalWidth===0){ await new Promise(r=>setTimeout(r, 80)); continue; }
+    faceInFlight = true;
+    try{
+      ctx.drawImage(liveImg,0,0,probe.width,probe.height);
+      const image = probe.toDataURL('image/jpeg', 0.6);
+      const r = await fetch('/api/operator_face_verify',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ image })
+      });
+      const j = await r.json().catch(()=>null);
+      if(j && j.success){
+        showBanner(true, `Emp ID: ${j.emp_id}\nName: ${j.name||''}`);
+        unlockForm();
+        break;
+      }else if(j && j.message && !['no_face','unknown_face'].includes(j.message)){
+        showBanner(false, 'Access denied');
+      }
+    }catch(_){ }
+    finally{ faceInFlight=false; }
+    await new Promise(r=>setTimeout(r, 100));
+  }
+}
+async function fingerPoll(){
+  if (adminUnlocked || fingerPollRunning) return; 
+  fingerPollRunning = true;
+  while(!adminUnlocked && formWrapper.classList.contains('hidden')){
+    try{
+      const r = await fetch('/api/operator_finger_verify', { method:'POST' });
+      const j = await r.json().catch(()=>null);
+      if(j && j.success){ showBanner(true, `Emp ID: ${j.emp_id}\nName: ${j.name||''}`); unlockForm(); break; }
+    }catch(_){}
+    await new Promise(r=>setTimeout(r, 250));
+  }
+}
+async function rfidPoll(){
+  if (adminUnlocked || rfidPollRunning) return; 
+  rfidPollRunning = true;
+  while(!adminUnlocked && formWrapper.classList.contains('hidden')){
+    try{
+      const r = await fetch('/api/operator_rfid_verify', { method:'POST' });
+      const j = await r.json().catch(()=>null);
+      if(j && j.success){ showBanner(true, `Emp ID: ${j.emp_id}\nName: ${j.name||''}`); unlockForm(); break; }
+    }catch(_){}
+    await new Promise(r=>setTimeout(r, 250));
+  }
+}
+
+/* ===== Password modal + OSK ===== */
+const pwModal = document.getElementById('pw-modal');
+const pwInput = document.getElementById('pw-input');
+const pwMsg   = document.getElementById('pw-msg');
+const pwEye   = document.getElementById('pw-eye');
+const oskWrap = document.getElementById('osk-wrap');
+
+let keyboard = null;
+let oskVisible = false;
+
+function openModal(id){ document.getElementById(id).style.display='flex'; }
+function closeModal(id){ document.getElementById(id).style.display='none'; }
+
+function openOSK(){
+  if(!keyboard){
+    keyboard = new window.SimpleKeyboard.default({
+      onChange: input => { pwInput.value = input; },
+      onKeyPress: button => {
+        if(button === "{enter}") doPwSubmit();
+        if(button === "{shift}" || button === "{lock}") toggleShift();
+      },
+      layout: {
+        default: [
+          "` 1 2 3 4 5 6 7 8 9 0 - = {bksp}",
+          "{tab} q w e r t y u i o p [ ] \\",
+          "{lock} a s d f g h j k l ; ' {enter}",
+          "{shift} z x c v b n m , . / {shift}",
+          "{space}"
+        ],
+        shift: [
+          "~ ! @ # $ % ^ & * ( ) _ + {bksp}",
+          "{tab} Q W E R T Y U I O P { } |",
+          "{lock} A S D F G H J K L : \" {enter}",
+          "{shift} Z X C V B N M < > ? {shift}",
+          "{space}"
+        ]
+      },
+      display: { "{bksp}":"⌫","{enter}":"⏎","{tab}":"⇥","{lock}":"⇪","{shift}":"⇧","{space}":"[ space ]" }
+    });
+  }
+  oskWrap.classList.remove('hidden');
+  oskVisible = true;
+}
+function closeOSK(){ oskWrap.classList.add('hidden'); oskVisible = false; }
+function toggleShift(){
+  const layoutName = keyboard.options.layoutName || "default";
+  keyboard.setOptions({ layoutName: layoutName === "default" ? "shift" : "default" });
+}
+pwInput.addEventListener('focus', openOSK);
+document.addEventListener('mousedown', (e)=>{
+  if(!pwModal.contains(e.target)) return;
+  const inside = e.target===pwInput || oskWrap.contains(e.target);
+  if(!inside && oskVisible) closeOSK();
+});
+pwEye.addEventListener('click', ()=>{
+  const isPw = pwInput.type === 'password';
+  pwInput.type = isPw ? 'text' : 'password';
+  pwEye.innerHTML = isPw ? '<i class="fa fa-eye-slash"></i>' : '<i class="fa fa-eye"></i>';
+});
+function doPwSubmit(){
+  const pw = pwInput.value.trim();
+  if(!pw){ pwMsg.style.color='#C0342D'; pwMsg.textContent='Enter password.'; return; }
+  pwMsg.textContent='Verifying…';
+  fetch('/api/operator_password_login',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ password: pw })
+  })
+  .then(r=>r.json()).then(j=>{
+    if(j.success){
+      pwMsg.style.color='#157347'; pwMsg.textContent='Verified';
+      setTimeout(()=>{ closeModal('pw-modal'); pwInput.value=''; closeOSK(); showBanner(true,'Admin verified (password)'); unlockForm(); }, 300);
+    }else{
+      pwMsg.style.color='#C0342D';
+      pwMsg.textContent = j.message || 'Invalid password';
+    }
+  }).catch(_=>{
+    pwMsg.style.color='#C0342D'; pwMsg.textContent='Error';
+  });
+}
+document.getElementById('pw-submit').addEventListener('click', doPwSubmit);
+document.getElementById('pw-cancel').addEventListener('click', ()=>{ closeModal('pw-modal'); closeOSK(); pwInput.value=''; });
+document.getElementById('pwBtn').addEventListener('click', ()=>{
+  openModal('pw-modal'); pwMsg.textContent=''; pwInput.value=''; pwInput.focus();
+});
+
+/* Auto-start admin auth loops */
+(function initAuth(){
+  faceLoop();
+  fingerPoll();
+  rfidPoll();
+})();
+
+/* ================== REGISTRATION LOGIC ================== */
+const empField    = document.getElementById('emp_id');
+const nameField   = document.getElementById('name');
+const roleField   = document.getElementById('role');
+const birthField  = document.getElementById('birthdate');
+const rfidField   = document.getElementById('rfid_uid');
+const resultMsg   = document.getElementById('result-msg');
+
+const faceBtn     = document.getElementById('faceBtn');
+const fingerBtn   = document.getElementById('fingerBtn');
+const rfidBtn     = document.getElementById('rfidBtn');
+
+async function postJSON(url, payload){
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload||{}) });
+  const t = await r.text(); try{ return JSON.parse(t);}catch{ return {success:false, message:t}; }
+}
+
+/* Enable biometric buttons when emp_id + name present */
+[empField, nameField, roleField, birthField].forEach(el=>el.addEventListener('input', enableByValidity, {passive:true}));
+function enableByValidity(){
+  const ok = empField.value.trim() && nameField.value.trim();
+  faceBtn.disabled   = !ok;
+  fingerBtn.disabled = !ok;
+  rfidBtn.disabled   = !ok;
+}
+enableByValidity();
+
+/* Upsert basic user (emp_id, name, role, birthdate) */
+async function upsertUser(){
+  const emp_id = empField.value.trim();
+  const name   = nameField.value.trim();
+  const role   = roleField.value;
+  const birthdate = birthField.value || null;
+
+  if(!emp_id || !name){
+    resultMsg.style.color='#C0342D';
+    resultMsg.textContent = "Employee ID and Name are required.";
+    return { success:false };
+  }
+  const save = await postJSON('/api/user_upsert', { emp_id, name, role, birthdate });
+  if(!(save && save.success)){
+    resultMsg.style.color='#C0342D';
+    resultMsg.textContent = (save && save.message) || 'Save failed.';
+    return { success:false };
+  }
+  resultMsg.style.color='#205081';
+  resultMsg.textContent = 'User saved.';
+  return { success:true };
+}
+
+/* ================= USER PICKER (emp_id, name, role, birthdate) ================= */
+const userListEl = document.getElementById('user-list');
+const userCount  = document.getElementById('user-count');
+let USERS = []; let usersLoaded = false;
+
+async function fetchAllUsers(){
+  if (usersLoaded) return;
+  try{
+    const r = await fetch('/api/users_list');
+    const j = await r.json();
+    if (j && j.success && Array.isArray(j.users)){
+      USERS = j.users
+        .filter(u => u && u.emp_id)
+        .map(u => ({
+          emp_id: u.emp_id,
+          name: u.name || '',
+          role: u.role || '',
+          birthdate: u.birthdate || ''   // ISO preferred
+        }))
+        .sort((a,b)=> String(a.emp_id).localeCompare(String(b.emp_id), undefined, {numeric:true, sensitivity:'base'}));
+      usersLoaded = true;
+      userCount.textContent = `${USERS.length} user${USERS.length===1?'':'s'}`;
+    }else{
+      userCount.textContent = `0 users`;
+    }
+  }catch(e){ userCount.textContent = `—`; }
+}
+function renderUserList(items){
+  if(!items || items.length===0){ userListEl.classList.remove('show'); userListEl.innerHTML=''; return; }
+  userListEl.innerHTML = items.map(u => `
+    <div class="li" role="option" data-id="${u.emp_id}" data-name="${(u.name||'').replace(/"/g,'&quot;')}" data-role="${u.role||''}" data-birth="${u.birthdate||''}">
+      <span class="id">${u.emp_id}</span>
+      <span class="nm">${u.name||''}</span>
+      <span class="meta">
+        ${u.role ? `<span class="pill">${u.role}</span>`:''}
+        ${u.birthdate ? `<span>${u.birthdate}</span>`:''}
+      </span>
+      <span class="pill">select</span>
+    </div>
+  `).join('');
+  userListEl.classList.add('show');
+}
+function filterUsers(q){
+  q = (q||'').trim().toLowerCase();
+  if(!q){ renderUserList(USERS); return; }
+  const res = USERS.filter(u => {
+    const id = String(u.emp_id||'').toLowerCase();
+    const nm = String(u.name||'').toLowerCase();
+    return id.startsWith(q) || id.includes(q) || nm.includes(q);
+  });
+  renderUserList(res);
+}
+empField.addEventListener('focus', async ()=>{ await fetchAllUsers(); filterUsers(empField.value); });
+empField.addEventListener('input', ()=>{ filterUsers(empField.value); });
+empField.addEventListener('blur', ()=>{ setTimeout(()=> userListEl.classList.remove('show'), 180); });
+userListEl.addEventListener('mousedown', (e)=>{ e.preventDefault(); });
+userListEl.addEventListener('click', (e)=>{
+  const li = e.target.closest('.li'); if(!li) return;
+  empField.value  = li.getAttribute('data-id') || '';
+  nameField.value = li.getAttribute('data-name') || '';
+  const role = li.getAttribute('data-role') || '';
+  if(role){ [...roleField.options].forEach(o=>{ if(o.value===role) roleField.value=role; }); }
+  const bd = li.getAttribute('data-birth') || '';
+  if(bd) birthField.value = bd;
+  userListEl.classList.remove('show');
+  enableByValidity();
+});
+
+/* ================= FACE REGISTER (steady-hold + full-res) ================= */
+const faceCanvas = document.getElementById('camera-canvas');
+const faceCtx    = faceCanvas.getContext('2d', { willReadFrequently:true });
+const faceStream = document.getElementById('camera-stream');
+const faceInstr  = document.getElementById('faceInstructions');
+
+let detector = null;
+try{ if('FaceDetector' in window){ detector = new FaceDetector({ fastMode:true, maxDetectedFaces:1 }); } }catch(_){ detector = null; }
+
+function resizeOverlayToVideo(){
+  const r = faceStream.getBoundingClientRect();
+  faceCanvas.width = Math.max(320, Math.floor(r.width));
+  faceCanvas.height = Math.max(240, Math.floor(r.height));
+}
+function guideRect(){
+  const w = faceCanvas.width, h = faceCanvas.height;
+  const side = Math.floor(Math.min(w, h) * 0.60);
+  const x = Math.floor((w - side)/2), y = Math.floor((h - side)/2);
+  return {x, y, width: side, height: side};
+}
+function drawGuide(){
+  const w = faceCanvas.width, h = faceCanvas.height;
+  const g = guideRect();
+  faceCtx.clearRect(0,0,w,h);
+  faceCtx.lineWidth = 4;
+  faceCtx.strokeStyle = '#38b000';
+  faceCtx.strokeRect(g.x, g.y, g.width, g.height);
+}
+function getVideoDims(){ return { nw: faceStream.naturalWidth||0, nh: faceStream.naturalHeight||0 }; }
+function mapOverlayToNatural(bb){
+  const { nw, nh } = getVideoDims();
+  const ow = faceCanvas.width, oh = faceCanvas.height;
+  if (!nw || !nh || !ow || !oh || !bb) return null;
+  const sx = nw / ow, sy = nh / oh;
+  return { x:Math.max(0,Math.floor(bb.x*sx)), y:Math.max(0,Math.floor(bb.y*sy)), width:Math.min(nw,Math.floor(bb.width*sx)), height:Math.min(nh,Math.floor(bb.height*sy)) };
+}
+async function detectBox(){
+  resizeOverlayToVideo();
+  if(!faceStream.complete || faceStream.naturalWidth===0){ drawGuide(); return null; }
+  drawGuide();
+  if(!detector) return null;
+  const tmp = document.createElement('canvas');
+  tmp.width = faceCanvas.width; tmp.height = faceCanvas.height;
+  const tctx = tmp.getContext('2d', { willReadFrequently:true });
+  tctx.drawImage(faceStream, 0, 0, tmp.width, tmp.height);
+  const faces = await detector.detect(tmp).catch(()=>[]);
+  if(faces && faces.length){
+    const bb = faces[0].boundingBox;
+    faceCtx.lineWidth = 2; faceCtx.strokeStyle = '#38b000';
+    faceCtx.strokeRect(bb.x, bb.y, bb.width, bb.height);
+    return { bb };
+  }
+  return null;
+}
+function captureImageData(overlayBB, margin=0.18){
+  const { nw, nh } = getVideoDims();
+  if (!nw || !nh) return null;
+  const src = document.createElement('canvas'); src.width = nw; src.height = nh;
+  src.getContext('2d').drawImage(faceStream, 0, 0, nw, nh);
+  if (!overlayBB) return src.toDataURL('image/jpeg', 0.98);
+  const nbb = mapOverlayToNatural(overlayBB); if (!nbb) return src.toDataURL('image/jpeg', 0.98);
+  const mx = margin;
+  const x = Math.max(0, Math.floor(nbb.x - nbb.width*mx));
+  const y = Math.max(0, Math.floor(nbb.y - nbb.height*mx));
+  const w = Math.min(nw - x, Math.floor(nbb.width*(1 + 2*mx)));
+  const h = Math.min(nh - y, Math.floor(nbb.height*(1 + 2*mx)));
+  const out = document.createElement('canvas'); out.width = Math.max(320, w); out.height = Math.max(320, h);
+  out.getContext('2d').drawImage(src, x, y, w, h, 0, 0, out.width, out.height);
+  return out.toDataURL('image/jpeg', 0.98);
+}
+let faceSubmitting = false; let faceCaptureRunning = false;
+async function startSteadyHoldCapture(){
+  const HOLD_SECONDS = 1.6;
+  let startedAt = null, lastDet = null;
+  while(true){
+    if (faceSubmitting) return;
+    const det = await detectBox();
+    const g = guideRect();
+    let inside = false;
+    if(det && det.bb){
+      lastDet = det;
+      const cx = det.bb.x + det.bb.width/2;
+      const cy = det.bb.y + det.bb.height/2;
+      inside = (cx >= g.x && cx <= g.x+g.width && cy >= g.y && cy <= g.y+g.height);
+    }else{ inside = true; }
+    if(inside){
+      if(!startedAt) startedAt = performance.now();
+      const elapsed = (performance.now() - startedAt)/1000;
+      const remaining = Math.max(0, HOLD_SECONDS - elapsed);
+      faceInstr.textContent = `Hold steady (${remaining.toFixed(1)}s)…`;
+      if(elapsed >= HOLD_SECONDS){
+        faceSubmitting = true;
+        const imgData = captureImageData(lastDet?.bb || null, 0.18);
+        await submitFaceSmart(imgData, lastDet?.bb || null);
+        faceSubmitting = false;
+        break;
+      }
+    }else{
+      startedAt = null;
+      faceInstr.textContent = 'Align your face inside the green box…';
+    }
+    await new Promise(r=>setTimeout(r, 100));
+  }
+}
+async function submitFaceSmart(primaryImage, overlayBB){
+  const emp_id = empField.value.trim();
+  const name   = nameField.value.trim();
+  const role   = roleField.value;
+
+  try{
+    const chk = await postJSON('/api/check_face_duplicate', { image: primaryImage });
+    if(chk && chk.duplicate){
+      document.getElementById('modal-img').src = chk.image || '';
+      document.getElementById('modal-empinfo').textContent = `Emp ID: ${chk.emp_id || '-'}\nName: ${chk.name || '-'}`;
+      faceInstr.textContent = "Face already registered!";
+      openModal('dup-modal');
+      setTimeout(()=>closeModal('face-modal'), 1200);
+      return;
+    }
+  }catch(_){}
+
+  async function tryRegister(img){
+    return await postJSON('/api/face_register', { emp_id, name, role, image: img });
+  }
+  let res = await tryRegister(primaryImage);
+  const msgA = (res && (res.message || res.error || '')) + '';
+  if(!res?.success && /no face/i.test(msgA)){
+    const fullFrame = captureImageData(null);
+    res = await tryRegister(fullFrame);
+    if(!res?.success && /no face/i.test((res.message||'')+'')){
+      const wider = overlayBB ? captureImageData(overlayBB, 0.35) : fullFrame;
+      res = await tryRegister(wider);
+    }
+  }
+  resultMsg.style.color = res.success ? '#157347' : '#C0342D';
+  resultMsg.textContent = res.message || (res.success ? 'Face registered.' : 'Registration failed.');
+  faceInstr.textContent = res.success ? 'Face registered successfully!' : (res.message || 'Failed.');
+  setTimeout(()=> closeModal('face-modal'), res.success ? 900 : 1400);
+}
+document.getElementById('faceCancelBtn').addEventListener('click', ()=> closeModal('face-modal'));
+document.getElementById('faceBtn').addEventListener('click', async ()=>{
+  if (faceSubmitting || faceCaptureRunning) return;
+  const ok = await upsertUser(); if(!(ok && ok.success)) return;
+  faceBtn.disabled = true;
+  openModal('face-modal');
+  let tries=0;
+  while((!faceStream.complete || faceStream.naturalWidth===0) && tries<30){ await new Promise(r=>setTimeout(r, 80)); tries++; }
+  resizeOverlayToVideo();
+  await new Promise(r=>setTimeout(r, 60));
+  faceInstr.textContent = 'Align your face inside the green box…';
+  faceCaptureRunning = true;
+  startSteadyHoldCapture().finally(()=>{ faceCaptureRunning = false; faceBtn.disabled = false; });
+});
+
+/* ================= RFID & FINGERPRINT REGISTER + DUP CHECKS ================= */
+const fpStatus  = document.getElementById('fingerStatus');
+document.getElementById('fpCloseBtn').addEventListener('click', ()=> closeModal('fp-modal'));
+
+function showDupGeneric(title, text){
+  document.getElementById('dup-generic-title').textContent = title || 'Duplicate Found';
+  document.getElementById('dup-generic-body').textContent = text || '';
+  openModal('dup-generic-modal');
+}
+
+/* RFID */
+document.getElementById('rfidBtn').addEventListener('click', async ()=>{
+  const ok = await upsertUser(); if(!(ok && ok.success)) return;
+  const emp_id = empField.value.trim();
+  rfidField.value = ""; resultMsg.style.color='#205081'; resultMsg.textContent = "Tap the card on the reader…";
+  try{
+    const r = await postJSON('/api/rfid_register', { employee_id: emp_id, name: nameField.value.trim() });
+    if(r.duplicate){
+      const info = `This RFID is already linked.\nEmp ID: ${r.emp_id || '-'}\nName: ${r.name || '-'}`;
+      showDupGeneric('Duplicate RFID', info);
+      resultMsg.style.color='#C0342D'; resultMsg.textContent=r.message || 'RFID already assigned.';
+      return;
+    }
+    if(r.success){
+      const uid = r.card_number || r.uid || r.rfid || r.rfid_uid || "";
+      if(uid) rfidField.value = uid;
+      resultMsg.style.color='#157347'; resultMsg.textContent= r.message || 'RFID registered.';
+    }else{
+      const msg = (r.message||'') + '';
+      if(/duplicate|already\s*assigned|exists/i.test(msg)){
+        showDupGeneric('Duplicate RFID', msg);
+      }
+      resultMsg.style.color='#C0342D'; resultMsg.textContent= msg || 'RFID registration failed.';
+    }
+  }catch(e){ resultMsg.style.color='#C0342D'; resultMsg.textContent="Error: "+e.message; }
+});
+
+/* Fingerprint */
+document.getElementById('fingerBtn').addEventListener('click', async ()=>{
+  const ok = await upsertUser(); if(!(ok && ok.success)) return;
+  const emp_id = empField.value.trim();
+  openModal('fp-modal');
+  fpStatus.textContent = `Place finger on sensor…`;
+  try{
+    const r = await postJSON('/api/finger_register', { user_id: emp_id, username: nameField.value.trim() });
+    if(r.duplicate){
+      const info = `This fingerprint matches an existing user.\nEmp ID: ${r.emp_id || '-'}\nName: ${r.name || '-'}`;
+      showDupGeneric('Duplicate Fingerprint', info);
+      fpStatus.textContent = r.message || 'Duplicate fingerprint.';
+      resultMsg.style.color='#C0342D'; resultMsg.textContent=r.message || 'Duplicate fingerprint.';
+      return;
+    }
+    if(r.success){
+      fpStatus.textContent = (r.message || 'Fingerprint enrolled.') + (r.template_id ? ` (ID ${r.template_id})` : '');
+      resultMsg.style.color='#157347';
+      resultMsg.textContent = 'Fingerprint enrolled.' + (r.template_id ? ` (ID ${r.template_id})` : '');
+    }else{
+      const msg = (r.message||'') + '';
+      if(/duplicate|already\s*enrolled|exists/i.test(msg)){
+        showDupGeneric('Duplicate Fingerprint', msg);
+      }
+      fpStatus.textContent = msg || 'Enroll failed.';
+      resultMsg.style.color='#C0342D'; resultMsg.textContent= msg || 'Fingerprint failed.';
+    }
+  }catch(e){
+    fpStatus.textContent="Error: "+e.message;
+    resultMsg.style.color='#C0342D'; resultMsg.textContent="Error: "+e.message;
+  }
+});
+
+/* ======== Birthdate Numeric Keyboard (SimpleKeyboard) ======== */
+(function() {
+  const birthField = document.getElementById('birthdate');
+  if (!birthField) return;
+
+  const wrap = document.getElementById('birth-osk-wrap');
+  let birthKB = null;
+  let kbOpen = false;
+
+  function digitsOnly(str){ return (str||'').replace(/\D+/g,''); }
+  function formatYYYYMMDDFromDigits(digs){
+    digs = (digs||'').slice(0,8);
+    if (digs.length <= 4) return digs;
+    if (digs.length <= 6) return digs.slice(0,4) + '-' + digs.slice(4);
+    return digs.slice(0,4) + '-' + digs.slice(4,6) + '-' + digs.slice(6);
+  }
+  function dispatchInput(el){
+    try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch(_) {}
+  }
+  function flashMessage(msg){
+    const el = document.getElementById('result-msg');
+    if (!el) return;
+    const prev = el.textContent;
+    const prevColor = el.style.color;
+    el.style.color = '#C0342D';
+    el.textContent = msg;
+    setTimeout(()=>{ el.style.color = prevColor || '#205081'; el.textContent = prev || ''; }, 1200);
+  }
+  function validateBirth(val){
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(val||'')) return false;
+    const [y,m,d] = val.split('-').map(n=>parseInt(n,10));
+    if (m < 1 || m > 12) return false;
+    if (d < 1 || d > 31) return false;
+    const mdays = [31, (y%4===0 && (y%100!==0 || y%400===0)) ? 29 : 28, 31,30,31,30,31,31,30,31,30,31];
+    if (d > mdays[m-1]) return false;
+    if (y < 1900 || y > 2100) return false;
+    return true;
+  }
+
+  function openBirthKB(){
+    if (!birthKB) {
+      birthKB = new window.SimpleKeyboard.default({
+        layout: {
+          default: [
+            "1 2 3",
+            "4 5 6",
+            "7 8 9",
+            "0 {bksp}",
+            "{enter}"
+          ]
+        },
+        display: { "{bksp}":"⌫", "{enter}":"OK" },
+        onKeyPress: (button) => {
+          if (button === "{enter}") {
+            if (validateBirth(birthField.value)) {
+              closeBirthKB();
+            } else {
+              flashMessage("Invalid date. Use YYYY-MM-DD.");
+            }
+            return;
+          }
+          if (button === "{bksp}") {
+            let d = digitsOnly(birthField.value);
+            d = d.slice(0, -1);
+            birthField.value = formatYYYYMMDDFromDigits(d);
+            dispatchInput(birthField);
+            return;
+          }
+          if (/^\d$/.test(button)) {
+            let d = digitsOnly(birthField.value);
+            if (d.length >= 8) return;
+            d += button;
+            birthField.value = formatYYYYMMDDFromDigits(d);
+            dispatchInput(birthField);
+          }
+        }
+      });
+    }
+    const existingDigits = digitsOnly(birthField.value);
+    birthField.value = formatYYYYMMDDFromDigits(existingDigits);
+    wrap.classList.remove('hidden');
+    kbOpen = true;
+  }
+  function closeBirthKB(){ wrap.classList.add('hidden'); kbOpen = false; }
+
+  birthField.addEventListener('focus', openBirthKB);
+  document.addEventListener('mousedown', (e)=>{
+    if (!kbOpen) return;
+    const insideKB = wrap.contains(e.target);
+    const insideInput = (e.target === birthField);
+    if (!insideKB && !insideInput) closeBirthKB();
+  });
+  document.addEventListener('keydown', (e)=>{
+    if (kbOpen && e.key === 'Escape') closeBirthKB();
+  });
+  birthField.addEventListener('beforeinput', (e)=>{
+    if (e.inputType === 'insertText' && !/^\d$/.test(e.data)) e.preventDefault();
+  });
+  birthField.addEventListener('input', ()=>{
+    const d = digitsOnly(birthField.value);
+    birthField.value = formatYYYYMMDDFromDigits(d);
+  });
+})();
+
+/* ===== Start admin auth loops ===== */
+(function init(){ /* already kicked off above */ })();
+</script>
+{% endblock %}

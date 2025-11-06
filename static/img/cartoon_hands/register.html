@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}User Registration{% endblock %}
+
+{% block page_css %}
+:root{--brand:#205081;--accent:#FFA500;--ink:#2D4668;--muted:#667A94;--bg:#F7F6F1;--card:#fff;--line:#E6EBF2;--success:#157347;--danger:#C0342D;}
+body{margin:0;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+.container{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 6px 20px rgba(32,80,129,.1);width:min(720px,calc(100% - 32px));margin:32px auto;padding:24px}
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.card-head h2{margin:0;color:var(--brand);font-weight:800}
+.form-row{display:grid;grid-template-columns:140px 1fr;gap:8px 12px;align-items:center;margin-bottom:12px}
+label{font-weight:700;color:var(--brand)}
+input,select{padding:10px 14px;font-size:1rem;border-radius:10px;border:1.5px solid var(--line)}
+.req::after{content:" *";color:#b02a37}
+.actions{display:flex;flex-direction:column;gap:10px;margin:10px 0}
+.cta{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;border:none;border-radius:12px;font-weight:700;cursor:pointer;background:var(--accent);color:#fff}
+.cta img{width:20px;height:20px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#f9f9f9;cursor:pointer;font-weight:700}
+.chip[data-state="enrolled"]{background:#E9F7EF;color:var(--success)}
+.chip[data-state="missing"]{background:#FFF0F0;color:var(--danger)}
+.footer-row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+.btn{padding:10px 16px;border-radius:10px;border:1px solid var(--line);background:#fff;font-weight:700;cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff;border:none}
+.cmask{display:none;position:absolute;inset:0;background:rgba(32,80,129,.14);z-index:50;border-radius:16px}
+.cmodal{display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,calc(100% - 40px));background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 36px rgba(0,0,0,.22);z-index:60;overflow:hidden}
+.cmodal header{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#F7F9FB;border-bottom:1px solid var(--line);font-weight:800;color:var(--brand)}
+.cmodal .content{padding:14px 16px}
+.cmodal .actions{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid var(--line)}
+.btn-sm{border:1px solid var(--line);background:#EEF3F9;color:#205081;border-radius:10px;padding:10px 12px;font-weight:800;cursor:pointer}
+.rfid-hero{width:120px;height:120px;margin:0 auto 10px;background:url('/static/img/card_icon.png') center/contain no-repeat;opacity:.95}
+.status{text-align:center;color:#444;font-size:.96rem}
+.finger-wrap{display:flex;justify-content:center;gap:16px;flex-wrap:wrap}
+.hand-photo{position:relative;width:240px;height:240px;background:#F2D2B6;border:2px solid #B58662;border-radius:14px;overflow:hidden}
+.hand-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.hand-photo svg.hotspots{position:absolute;inset:0;width:100%;height:100%}
+.hot{fill:rgba(0,0,0,0);stroke:rgba(0,0,0,0);cursor:pointer}
+.hot:hover{stroke:#205081;stroke-width:2;fill:rgba(32,80,129,.05)}
+.hot.enrolled{fill:rgba(21,115,71,.2);stroke:#157347;stroke-width:2.5}
+.finger-badge{position:absolute;background:#fff;border:1px solid #E6EBF2;font:700 10px/1 system-ui;color:#205081;border-radius:10px;padding:3px 6px;pointer-events:none}
+{% endblock %}
+
+{% block body %}
+<div class="container">
+  <div class="card-head">
+    <h2>Register User</h2>
+    <span class="pill" id="clock">--:--:--</span>
+  </div>
+
+  <div class="form-row"><label class="req" for="emp_id">Employee ID</label><input id="emp_id" type="text" placeholder="Enter Employee ID"></div>
+  <div class="form-row"><label class="req" for="name">Name</label><input id="name" type="text" placeholder="Enter Name"></div>
+  <div class="form-row"><label class="req" for="role">Role</label><select id="role"><option>User</option><option>Admin</option><option>Super Admin</option></select></div>
+  <div class="form-row"><label for="birthdate">Birthdate</label><input id="birthdate" type="date"></div>
+  <div class="form-row"><label for="rfid_uid">RFID UID</label><input id="rfid_uid" type="text" disabled></div>
+
+  <div class="actions">
+    <button class="cta" id="faceBtn"><img src="/static/img/face_icon.png" alt=""> Register Face</button>
+    <button class="cta" id="fingerBtn"><img src="/static/img/finger_icon.png" alt=""> Register Fingerprint</button>
+    <button class="cta" id="rfidBtn"><img src="/static/img/card_icon.png" alt=""> Register RFID</button>
+  </div>
+
+  <b>Finger Status</b>
+  <div style="color:var(--muted);font-size:.9rem">1 compulsory; up to 10 optional</div>
+  <div class="chips" id="fingerChips">
+    <span class="chip" data-code="LT" data-state="missing">LT</span>
+    <span class="chip" data-code="LI" data-state="missing">LI</span>
+    <span class="chip" data-code="LM" data-state="missing">LM</span>
+    <span class="chip" data-code="LR" data-state="missing">LR</span>
+    <span class="chip" data-code="LL" data-state="missing">LL</span>
+    <span class="chip" data-code="RT" data-state="missing">RT</span>
+    <span class="chip" data-code="RI" data-state="missing">RI</span>
+    <span class="chip" data-code="RM" data-state="missing">RM</span>
+    <span class="chip" data-code="RR" data-state="missing">RR</span>
+    <span class="chip" data-code="RL" data-state="missing">RL</span>
+  </div>
+
+  <div class="footer-row">
+    <button class="btn" id="cancelBtn">Cancel</button>
+    <button class="btn primary" id="saveBtn">Save</button>
+  </div>
+
+  <div class="cmask" id="cmask"></div>
+
+  <section class="cmodal" id="rfidModal">
+    <header><img src="/static/img/card_icon.png" alt=""><span>RFID Registration</span></header>
+    <div class="content"><div class="rfid-hero"></div><div class="status" id="rfidStatus">Take the card near the reader…</div></div>
+    <div class="actions"><button class="btn-sm danger" id="rfidClose">Close</button></div>
+  </section>
+
+  <section class="cmodal" id="fingerModal">
+    <header><img src="/static/img/finger_icon.png" alt=""><span>Fingerprint Enrollment</span></header>
+    <div class="content">
+      <div style="text-align:center;font-weight:700;margin-bottom:8px;">Tap a finger to enroll</div>
+      <div class="finger-wrap">
+        <div class="hand-photo left">
+          <img class="hand-img" src="/static/img/hand_left.png" alt="Left hand">
+          <svg class="hotspots" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+            <path class="hot" data-finger="LT" d="M25,136 C14,133 11,119 18,112 C33,97 64,106 72,118 C78,127 66,140 48,142 C39,143 31,140 25,136 Z"/>
+            <path class="hot" data-finger="LI" d="M76,18 C74,8 90,5 96,16 C101,25 99,60 97,73 C95,84 80,82 78,68 C76,54 76,36 76,18 Z"/>
+            <path class="hot" data-finger="LM" d="M106,8 C104,-2 124,-2 128,10 C132,24 130,60 126,74 C122,86 106,84 104,64 C103,48 105,28 106,8 Z"/>
+            <path class="hot" data-finger="LR" d="M136,16 C134,4 152,4 156,18 C158,30 156,60 152,70 C148,82 136,78 134,62 C133,50 135,32 136,16 Z"/>
+            <path class="hot" data-finger="LL" d="M162,36 C162,22 176,22 180,36 C182,46 181,66 178,72 C174,80 164,76 164,60 C164,52 163,44 162,36 Z"/>
+          </svg>
+        </div>
+        <div class="hand-photo right">
+          <img class="hand-img" src="/static/img/hand_right.png" alt="Right hand">
+          <svg class="hotspots" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+            <path class="hot" data-finger="RT" d="M215,136 C226,133 229,119 222,112 C207,97 176,106 168,118 C162,127 174,140 192,142 C201,143 209,140 215,136 Z"/>
+            <path class="hot" data-finger="RI" d="M164,18 C166,8 150,5 144,16 C139,25 141,60 143,73 C145,84 160,82 162,68 C164,54 164,36 164,18 Z"/>
+            <path class="hot" data-finger="RM" d="M134,8 C136,-2 116,-2 112,10 C108,24 110,60 114,74 C118,86 134,84 136,64 C137,48 135,28 134,8 Z"/>
+            <path class="hot" data-finger="RR" d="M104,16 C106,4 88,4 84,18 C82,30 84,60 88,70 C92,82 104,78 106,62 C107,50 105,32 104,16 Z"/>
+            <path class="hot" data-finger="RL" d="M78,36 C78,22 64,22 60,36 C58,46 59,66 62,72 C66,80 76,76 76,60 C76,52 77,44 78,36 Z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="status" id="fingerStatus">Select a finger…</div>
+    </div>
+    <div class="actions"><button class="btn-sm danger" id="fingerClose">Close</button></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const clockEl=document.getElementById('clock');function tick(){clockEl.textContent=new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:true});}setInterval(tick,1000);tick();
+</script>
+{% endblock %}
