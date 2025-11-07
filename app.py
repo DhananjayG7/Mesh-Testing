@@ -3784,42 +3784,33 @@ def discovery_page():
     return render_template("discovery.html")
 
 
-@app.route("/api/discovery/list", methods=["GET"])
-def api_discovery_list():
-    """
-    Return discovered devices from mesh_devices table.
-    If you later add 'last_seen' tracking, include it in the output.
-    """
+@app.route("/api/discovery/scan", methods=["POST"])
+def api_discovery_scan():
+    # broadcast once; listener (if running) will receive replies and store them
     try:
-        conn = get_db_connection()
-        rows = conn.execute("SELECT ip, device_id, name, port FROM mesh_devices ORDER BY ip COLLATE NOCASE").fetchall()
+        discovery_broadcast_once(bcast_ip='255.255.255.255', port=UDP_PORT)
+        return jsonify({"success": True, "message": "scan_sent"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route("/api/discovery/list")
+def api_discovery_list():
+    # read discovered devices from mesh table (or from an in-memory cache)
+    conn = get_db_connection()
+    try:
+        rows = conn.execute("SELECT device_ip,device_id,name,port,last_seen FROM mesh_devices ORDER BY last_seen DESC").fetchall()
         devices = []
         for r in rows:
             devices.append({
-                "ip": r["ip"],
+                "ip": r["device_ip"],
                 "device_id": r["device_id"],
                 "name": r["name"],
-                "port": int(r["port"] or UDP_PORT)
-                # optionally add 'last_seen' if you add that column later
+                "port": r["port"],
+                "last_seen": r["last_seen"],
             })
-        conn.close()
         return jsonify({"success": True, "devices": devices})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/discovery/scan", methods=["POST"])
-def api_discovery_scan():
-    """
-    Trigger a network discovery broadcast (non-blocking).
-    We spawn it in a thread so HTTP returns quickly; the listener will populate mesh_devices.
-    """
-    try:
-        # run broadcast in a background thread so UI doesn't wait
-        run_parallel(lambda: discovery_broadcast_once())
-        return jsonify({"success": True, "message": "Discovery broadcast sent"})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        conn.close()
 
 
 @app.route("/api/discovery/pair", methods=["POST"])
