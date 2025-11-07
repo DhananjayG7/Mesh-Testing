@@ -3793,24 +3793,39 @@ def api_discovery_scan():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
-@app.route("/api/discovery/list")
+@app.route("/api/discovery/list", methods=["GET"])
 def api_discovery_list():
-    # read discovered devices from mesh table (or from an in-memory cache)
-    conn = get_db_connection()
+    """
+    Schema-aware discovery list. Reads ip/device_id/name/port and optional last_seen.
+    """
     try:
-        rows = conn.execute("SELECT device_ip,device_id,name,port,last_seen FROM mesh_devices ORDER BY last_seen DESC").fetchall()
+        conn = get_db_connection()
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(mesh_devices)").fetchall()]
+        select_cols = ["ip AS ip", "device_id AS device_id", "name AS name", "port AS port"]
+        if "last_seen" in cols:
+            select_cols.append("last_seen AS last_seen")
+            order = "ORDER BY last_seen DESC"
+        else:
+            select_cols.append("'' AS last_seen")
+            order = ""
+
+        q = "SELECT " + ", ".join(select_cols) + " FROM mesh_devices " + order
+        rows = conn.execute(q).fetchall()
+
         devices = []
         for r in rows:
             devices.append({
-                "ip": r["device_ip"],
-                "device_id": r["device_id"],
-                "name": r["name"],
-                "port": r["port"],
-                "last_seen": r["last_seen"],
+                "ip": r["ip"],
+                "device_id": r["device_id"] or "",
+                "name": r["name"] or "",
+                "port": int(r["port"] or 5006),
+                "last_seen": r["last_seen"] or ""
             })
-        return jsonify({"success": True, "devices": devices})
-    finally:
         conn.close()
+        return jsonify({"success": True, "devices": devices})
+    except Exception as e:
+        app.logger.exception("api_discovery_list")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/discovery/pair", methods=["POST"])
