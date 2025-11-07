@@ -3894,5 +3894,19 @@ if __name__ == '__main__':
 
     # Persist TTL setting (optional)
     set_setting("handoff_ttl_seconds", str(HANDOFF_TTL_SECONDS))
+    
+    
+# near bottom of app.py, after DB/schema init and before app.run(...)
+    from threading import Event
+
+    _stop_evt = Event()
+
+    # run_parallel() helper already exists in your file (starts daemon threads).
+    # Start the UDP discovery listener so this device will reply and record devices:
+    run_parallel(
+    lambda: discovery_listener(_stop_evt, bind_ip="0.0.0.0", port=UDP_PORT),
+)
+
+
     # App runs even if Postgres is down; events queue and sync later.
     app.run(host='0.0.0.0', port=app.config.get("APP_PORT", 5000), debug=False)
