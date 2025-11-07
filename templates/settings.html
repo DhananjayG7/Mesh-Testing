@@ -99,6 +99,21 @@
       box-shadow:0 0 0 3px #0c7a3e22;
     }
     .power-row{ display:flex; justify-content:center; gap:12px; flex-wrap:wrap; margin-top:10px; }
+
+    /* LED state pill (matches theme) */
+    .led-pill{
+      display:inline-flex; align-items:center; gap:10px;
+      background:#e9eef7; color:#205081; border-radius:999px;
+      padding:8px 14px; font-weight:700; font-size:1rem; margin-bottom:10px;
+    }
+    .led-dot{
+      width:12px; height:12px; border-radius:50%;
+      background:#9aa7bd; box-shadow:0 0 0 3px #9aa7bd22;
+      transition:background .15s, box-shadow .15s;
+    }
+    .led-on .led-dot{ background:#0c7a3e; box-shadow:0 0 0 3px #0c7a3e22; }
+    .led-off .led-dot{ background:#b00020; box-shadow:0 0 0 3px #b0002022; }
+    .led-row{ display:flex; justify-content:center; gap:12px; flex-wrap:wrap; margin-top:8px; }
   </style>
 </head>
 <body>
@@ -118,7 +133,7 @@
   <!-- Scrollable page content -->
   <div class="scroll-area" id="scrollArea">
 
-    <!-- SOFTWARE INFO + POWER (NEW) -->
+    <!-- SOFTWARE INFO + POWER -->
     <div class="form-section">
       <h2>Software</h2>
       <div id="version-box" class="version-pill" title="Current software version">
@@ -131,6 +146,22 @@
         <button class="btn btn-danger" onclick="shutdownDevice()"><i class="fa fa-power-off"></i> Shutdown</button>
       </div>
       <div class="msg" id="power-msg"></div>
+    </div>
+
+    <!-- LED RELAY CONTROL (NEW) -->
+    <div class="form-section">
+      <h2>LED Relay</h2>
+      <div id="led-pill" class="led-pill led-off" title="Current relay state">
+        <span class="led-dot" aria-hidden="true"></span>
+        <span>Relay:</span>
+        <span id="led-state-text">OFF</span>
+      </div>
+      <div class="led-row">
+        <button class="btn btn-main" onclick="setRelay('on')"><i class="fa fa-lightbulb"></i> Turn ON</button>
+        <button class="btn btn-secondary" onclick="setRelay('off')"><i class="fa fa-ban"></i> Turn OFF</button>
+        <button class="btn" style="background:#eee;color:#205081" onclick="setRelay('toggle')"><i class="fa fa-exchange-alt"></i> Toggle</button>
+      </div>
+      <div class="msg" id="led-msg"></div>
     </div>
 
     <!-- VOLUME -->
@@ -206,7 +237,7 @@
       <div class="msg" id="dev-current" style="font-size:.95rem; color:#555;"></div>
     </div>
 
-    <!-- DAYS ALLOWED (NEW) -->
+    <!-- DAYS ALLOWED -->
     <div class="form-section" id="days-allowed-section" style="margin-bottom:40px;">
       <h2>Days Allowed (consecutive)</h2>
       <form onsubmit="return saveDaysAllowed(event)">
@@ -244,7 +275,7 @@
     if (ok === false) el.classList.add("err");
   }
 
-  /* ===== Version + Power (NEW) ===== */
+  /* ===== Version + Power ===== */
   async function loadVersion(){
     try{
       const r = await fetch('/api/version');
@@ -279,6 +310,33 @@
     }
   }
 
+  /* ===== LED RELAY (NEW) ===== */
+  async function refreshRelay(){
+    try{
+      const r = await fetch('/api/relay/state');
+      const j = await r.json();
+      const on = !!(j && j.on);
+      const pill = document.getElementById('led-pill');
+      const txt  = document.getElementById('led-state-text');
+      pill.classList.toggle('led-on', on);
+      pill.classList.toggle('led-off', !on);
+      txt.textContent = on ? 'ON' : 'OFF';
+    }catch(e){
+      setMsg('led-msg', 'Failed to read relay state', false);
+    }
+  }
+  async function setRelay(action){
+    setMsg('led-msg', '');
+    try{
+      const r = await fetch('/api/relay/' + action, { method:'POST' });
+      const j = await r.json();
+      if (!j.ok){ setMsg('led-msg', j.error || 'Failed', false); return; }
+      await refreshRelay();
+    }catch(e){
+      setMsg('led-msg', 'Failed to change relay', false);
+    }
+  }
+
   /* ===== Volume ===== */
   const volumeSlider = document.getElementById('volume-slider');
   const volumeValue  = document.getElementById('volume-value');
@@ -300,8 +358,10 @@
     loadDbDefaults();
     loadDeviceId();
 
-    // NEW: load Days Allowed
+    // NEW
     loadDaysAllowed();
+    refreshRelay();                 // initial relay state
+    setInterval(refreshRelay, 2000); // poll every 2s
 
     initInsetScroll(); // start inset scrollbar
   });
@@ -447,7 +507,7 @@
     return false;
   }
 
-  /* ===== DAYS ALLOWED (NEW) ===== */
+  /* ===== DAYS ALLOWED ===== */
   function clampInt(v){
     if (v === null || v === undefined) return 0;
     const n = parseInt(String(v).replace(/[^0-9\-]/g,''), 10);
@@ -496,7 +556,7 @@
     }
   });
 
-  /* ===== Inset Scrollbar (draggable, inside bezel) ===== */
+  /* ===== Inset Scrollbar ===== */
   function initInsetScroll(){
     const area  = document.getElementById('scrollArea');
     const head  = document.getElementById('pageHeader');

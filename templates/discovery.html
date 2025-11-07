@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Device Discovery — Ethos device</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <style>
+    :root{
+      --sb-inset-right: 36px;
+      --sb-width: 22px;
+      --sb-radius: 12px;
+      --header-max: 900px;
+    }
+    html,body{ height:100%; margin:0; background:#f9f6ef; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; overflow:hidden;}
+    .header{
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px 20px; width:100%; max-width:var(--header-max); margin:0 auto; box-sizing:border-box;
+      gap:12px;
+    }
+    .left-actions{ display:flex; align-items:center; gap:12px; min-width:160px; }
+    .back-btn{
+      display:inline-flex; align-items:center; gap:8px;
+      background:transparent; border:1px solid rgba(32,80,129,0.08);
+      color:#205081; padding:8px 12px; border-radius:10px; cursor:pointer; font-weight:700;
+      box-shadow:0 1px 0 rgba(0,0,0,0.02);
+    }
+    .back-btn:active{ transform:translateY(1px); }
+    .logo-main{ height:44px; }
+    .brand-name{ font-weight:800; color:#205081; font-size:1.05rem; margin-left:6px; letter-spacing:0.2px; }
+    .logo-right{ height:34px; }
+
+    .scroll-area{ position:relative; width:100%; height:calc(100vh - 84px); overflow-y:auto; overscroll-behavior:contain; padding:20px; box-sizing:border-box; }
+
+    .card{ max-width:1100px; margin:0 auto; background:#fff; border-radius:14px; padding:14px; box-shadow:0 6px 18px rgba(13,30,60,0.06); }
+
+    .controls{ display:flex; gap:10px; align-items:center; margin-bottom:12px; }
+    .btn{ background:#205081; color:#fff; padding:8px 12px; border-radius:8px; border:none; cursor:pointer; font-weight:600; }
+    .btn.secondary{ background:transparent; color:#205081; border:1px solid #e6eef8; }
+    .btn.warn{ background:#FF7A3D; color:#fff; }
+
+    table{ width:100%; border-collapse:collapse; margin-top:8px; }
+    th, td{ text-align:left; padding:12px 10px; border-bottom:1px solid #f0f3f7; font-size:13px; }
+    th{ color:#53637a; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.6px; }
+
+    .status-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; }
+    .online{ background:#18b16a; }
+    .offline{ background:#d1d5da; }
+    .muted{ color:#8d9bb3; font-size:12px; }
+
+    .custom-scroll{ position:fixed; right:var(--sb-inset-right); width:var(--sb-width); top:84px; height:calc(100vh - 84px); z-index:9999; display:none; background:rgba(0,0,0,0.06); border-radius:var(--sb-radius); box-sizing:border-box; }
+    .custom-thumb{ position:absolute; left:2px; right:2px; top:0; height:80px; background:#bfbfbf; border-radius:calc(var(--sb-radius) - 2px); box-shadow:0 1px 2px rgba(0,0,0,0.25); cursor:grab; touch-action:none; }
+
+    @media (max-width:720px){
+      .brand-name{ display:none; } /* save space on small screens */
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="left">
+      <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
+    </div>
+    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+    </div>
+    <div class="right">
+      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
+    </div>
+  </div>
+        <!-- brand name text -->
+        <div class="brand-name">Ethos device</div>
+      
+
+  <div class="scroll-area" id="scrollArea" aria-label="Discovery content">
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:6px 0 2px 0; color:#205081;">Device Discovery & Dashboard</h2>
+          <div class="muted">Scan your network for devices, pair a target, push user syncs, or remove entries.</div>
+        </div>
+        <div class="controls" style="margin-left:auto;">
+          <button id="btnScan" class="btn">Scan Network</button>
+          <button id="btnRefresh" class="btn secondary">Refresh</button>
+        </div>
+      </div>
+
+      <table id="devicesTable" aria-live="polite" style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>IP</th>
+            <th>Device ID</th>
+            <th>Device Name</th>
+            <th>Port</th>
+            <th>Status</th>
+            <th style="width:220px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:10px;" class="muted small" id="lastScan">Last scan: never</div>
+    </div>
+  </div>
+
+  <div class="custom-scroll" id="customScroll" aria-hidden="true">
+    <div class="custom-thumb" id="customThumb"></div>
+  </div>
+
+  <script>
+    // Back button behaviour
+    document.getElementById('backButton').addEventListener('click', function(){
+      // prefer history back, fallback to menu
+      if(window.history.length > 1) window.history.back();
+      else window.location.href = '/';
+    });
+
+    const $ = s=>document.querySelector(s);
+    const api = async (path, opts)=> {
+      const r = await fetch(path, opts);
+      try { return await r.json(); } catch(e){ return null; }
+    };
+
+    function renderDevices(rows){
+      const tbody = document.querySelector("#devicesTable tbody");
+      tbody.innerHTML = "";
+      if(!rows || rows.length===0){
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">No devices discovered yet. Click "Scan Network".</td></tr>`;
+        return;
+      }
+      rows.forEach(d=>{
+        const tr = document.createElement("tr");
+        const ip = d.ip || "";
+        const devId = d.device_id || "";
+        const name = d.name || "";
+        const port = d.port || 5006;
+        const isOnline = !!d.last_seen || d.status === "online";
+        const statusHtml = `<span class="status-dot ${isOnline ? "online":"offline"}"></span><span class="muted">${isOnline ? (d.last_seen || "online") : "offline"}</span>`;
+        tr.innerHTML = `
+          <td><strong>${ip}</strong></td>
+          <td>${devId}</td>
+          <td>${name}</td>
+          <td>${port}</td>
+          <td>${statusHtml}</td>
+          <td style="white-space:nowrap;">
+            <button class="btn" onclick="pairDevice('${ip}')">Pair</button>
+            <button class="btn secondary" onclick="syncDevice('${ip}')">Sync</button>
+            <button class="btn warn" onclick="removeDevice('${ip}')">Remove</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadDevices(){
+      const res = await api("/api/discovery/list");
+      if(res && res.success){ renderDevices(res.devices); } else { renderDevices([]); }
+    }
+
+    async function scanNetwork(){
+      $("#btnScan").disabled = true;
+      $("#btnScan").textContent = "Scanning…";
+      await api("/api/discovery/scan", { method: "POST" });
+      const now = new Date().toLocaleString();
+      $("#lastScan").textContent = "Last scan: " + now;
+      $("#btnScan").disabled = false;
+      $("#btnScan").textContent = "Scan Network";
+      setTimeout(loadDevices, 1400);
+    }
+
+    async function pairDevice(ip){
+      if(!confirm("Pair with " + ip + "?")) return;
+      const res = await api("/api/discovery/pair", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
+      if(res && res.success) alert("Paired " + ip);
+      loadDevices();
+    }
+
+    async function syncDevice(ip){
+      if(!confirm("Push users to " + ip + " now?")) return;
+      const res = await api("/api/discovery/sync", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
+      if(res && res.success) alert("Sync enqueued to " + ip);
+      loadDevices();
+    }
+
+    async function removeDevice(ip){
+      if(!confirm("Remove " + ip + " ?")) return;
+      const res = await api("/api/discovery/remove", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
+      if(res && res.success) alert("Removed " + ip);
+      loadDevices();
+    }
+
+    document.getElementById("btnScan").addEventListener("click", scanNetwork);
+    document.getElementById("btnRefresh").addEventListener("click", loadDevices);
+    loadDevices();
+
+    // scrollbar logic (same as menu)
+    (function (){
+      const area   = document.getElementById('scrollArea');
+      const header = document.getElementById('pageHeader');
+      const track  = document.getElementById('customScroll');
+      const thumb  = document.getElementById('customThumb');
+      let dragging=false, startY=0, startScrollTop=0;
+      const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
+
+      function layout(){
+        const rect = header.getBoundingClientRect();
+        const top  = Math.ceil(rect.bottom);
+        const h    = window.innerHeight - top;
+        track.style.top    = top + 'px';
+        track.style.height = h + 'px';
+        area.style.height  = h + 'px';
+        refreshThumb();
+        toggleTrack();
+      }
+      function toggleTrack(){ track.style.display = (area.scrollHeight > area.clientHeight + 1) ? 'block' : 'none'; }
+      function refreshThumb(){
+        const trackH    = track.clientHeight;
+        const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
+        const ratio   = area.clientHeight / (area.scrollHeight || 1);
+        const minThumb = 48;
+        const th      = Math.max(minThumb, Math.round(trackH * ratio));
+        thumb.style.height = Math.min(th, trackH) + 'px';
+        const maxTop   = trackH - thumb.offsetHeight;
+        const sTop     = area.scrollTop;
+        const tTop     = maxTop && maxScroll ? (sTop / maxScroll) * maxTop : 0;
+        thumb.style.transform = 'translateY(' + tTop + 'px)';
+      }
+      thumb.addEventListener('pointerdown', e=>{ dragging=true; thumb.setPointerCapture(e.pointerId); startY=e.clientY; startScrollTop=area.scrollTop; e.preventDefault(); });
+      thumb.addEventListener('pointermove', e=>{ if(!dragging) return; const trackH = track.clientHeight; const th = thumb.offsetHeight; const maxTop = Math.max(1, trackH - th); const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight); const deltaY = e.clientY - startY; const scrollPerPixel = maxScroll / maxTop; area.scrollTop = Math.max(0, Math.min(startScrollTop + deltaY * scrollPerPixel, maxScroll)); });
+      function endDrag(e){ if(!dragging) return; dragging=false; try{ thumb.releasePointerCapture(e.pointerId); }catch(_){ } }
+      thumb.addEventListener('pointerup', endDrag); thumb.addEventListener('pointercancel', endDrag); thumb.addEventListener('lostpointercapture', ()=> dragging=false);
+      track.addEventListener('pointerdown', e=>{ if(e.target !== track) return; const rect = track.getBoundingClientRect(); const clickY = e.clientY - rect.top; const th = thumb.offsetHeight; const trackH = track.clientHeight; const maxTop = Math.max(1, trackH - th); const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight); const targetTop = Math.max(0, Math.min(clickY - th/2, maxTop)); const targetScroll = (targetTop / maxTop) * maxScroll; area.scrollTop = targetScroll; });
+      area.addEventListener('scroll', refreshThumb, {passive:true});
+      window.addEventListener('resize', layout);
+      window.addEventListener('load', layout);
+      setTimeout(layout,300);
+    })();
+  </script>
+</body>
+</html>
