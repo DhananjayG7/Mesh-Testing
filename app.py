@@ -3777,6 +3777,96 @@ def api_shutdown():
 # --- Discovery dashboard routes & APIs ---
 from flask import render_template, request, jsonify
 
+# ----- discovery helpers -----
+import threading
+import socket
+import json
+import time
+import uuid
+
+# STOP event for background threads (create once at top-level if not present)
+try:
+    STOP_EVENT
+except NameError:
+    from threading import Event
+    STOP_EVENT = Event()
+
+# Use same UDP_PORT you already have; ensure UDP_PORT variable exists
+# UDP_PORT = 5006  # if not defined, set it earlier in your file
+
+def _get_primary_ip():
+    """Return an IPv4 address for the primary interface (works without extra deps)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # connect to public DNS to find outbound IP (no packets actually sent)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
+
+def discovery_broadcast_once(bcast_ip="255.255.255.255", port=UDP_PORT, timeout=0.25):
+    """
+    Broadcast a 'discover' packet using source port == port so replies return to our listener.
+    Sends to 255.255.255.255 and to interface-specific broadcast (xxx.xxx.xxx.255).
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except Exception:
+        pass
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    # try to bind sender to discovery port so replies return to listener
+    try:
+        s.bind(("0.0.0.0", int(port)))
+    except Exception as e:
+        # log but continue (some systems may not allow bind if listener didn't set reuse options)
+        print("[DISCOVERY] warning: sender bind to port failed:", e)
+
+    payload = {
+        "type": "discover",
+        "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
+        "name": get_setting("device_name", "Ethos Device"),
+        "port": int(port),
+        "ts": _now_iso() if "_now_iso" in globals() else ""
+    }
+    pkt = json.dumps(payload).encode("utf-8")
+
+    # send to global broadcast
+    try:
+        s.sendto(pkt, (bcast_ip, int(port)))
+    except Exception as e:
+        print("[DISCOVERY] broadcast send error to", bcast_ip, e)
+
+    # also send to interface broadcast (xxx.xxx.xxx.255) if we can compute it
+    local_ip = _get_primary_ip()
+    if local_ip:
+        try:
+            parts = local_ip.split(".")
+            if len(parts) == 4:
+                brd = ".".join(parts[:3] + ["255"])
+                try:
+                    s.sendto(pkt, (brd, int(port)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # small pause to give devices time to reply
+    time.sleep(timeout)
+    try:
+        s.close()
+    except:
+        pass
+
+# Run broadcast in background thread (non-blocking)
+def discovery_broadcast_bg(port=UDP_PORT):
+    threading.Thread(target=lambda: discovery_broadcast_once(port=port), daemon=True).start()
+
+
 @app.route("/discovery")
 def discovery_page():
     """
@@ -3785,57 +3875,76 @@ def discovery_page():
     """
     return render_template("discovery.html")
 
-def discovery_broadcast_once(bcast_ip="255.255.255.255", port=UDP_PORT, timeout=0.5):
-    """
-    Send a UDP broadcast *from* the discovery port so replies land back on our listener.
-    """
-    import socket, json, time
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # allow reuse so we can bind to same port as listener (if already bound)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        # Try to allow multiple processes to bind on same port (platform dependent)
-        try:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except Exception:
-            pass
-        # Make this a broadcast-capable socket
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        # Bind the socket to the DISCOVERY port so replies return to our listener
-        s.bind(("0.0.0.0", int(port)))
-    except Exception as e:
-        # If bind fails (rare, maybe listener already bound without SO_REUSEADDR), fall back but log
-        print("[DISCOVERY] warning: could not bind sender socket to port", port, ":", e)
 
-    try:
-        payload = {
-            "type": "discover",
-            "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
-            "name": get_setting("device_name", "Ethos Device"),
-            "port": int(port),
-            "ts": _now_iso()
-        }
-        pkt = json.dumps(payload).encode('utf-8')
-        # send to broadcast address
-        s.sendto(pkt, (bcast_ip, int(port)))
-        # also send to subnet-directed broadcast if desired (example 192.168.1.255)
-        # you can compute interface brd and send there too if needed
-        time.sleep(timeout)
-    finally:
-        try:
-            s.close()
-        except:
-            pass
-
+# ----- API endpoints (add or replace existing handlers) -----
+from flask import request
 
 @app.route("/api/discovery/scan", methods=["POST"])
 def api_discovery_scan():
-    # broadcast once; listener (if running) will receive replies and store them
+    """
+    Trigger a network discovery scan. Returns immediately and triggers background broadcast.
+    """
     try:
-        discovery_broadcast_once(bcast_ip='255.255.255.255', port=UDP_PORT)
-        return jsonify({"success": True, "message": "scan_sent"})
+        discovery_broadcast_bg()
+        return jsonify({"success": True, "message": "Scan started"})
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
+        app.logger.exception("api_discovery_scan")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route("/api/discovery/connect", methods=["POST"])
+def api_discovery_connect():
+    """
+    Simple connect placeholder: attempts a basic TCP connect to device on the provided IP and known port.
+    You can customize this to open a device UI URL or perform a handshake.
+    """
+    data = (request.get_json(force=True) or {})
+    ip = (data.get("ip") or "").strip()
+    if not ip:
+        return jsonify({"success": False, "message": "Missing ip"}), 400
+
+    # read port from DB if present, else use UDP_PORT default
+    try:
+        conn = get_db_connection()
+        row = conn.execute("SELECT port FROM mesh_devices WHERE ip = ?", (ip,)).fetchone()
+        conn.close()
+        port = int(row["port"]) if row and row["port"] else UDP_PORT
+    except Exception:
+        port = UDP_PORT
+
+    # Attempt a simple TCP handshake (non-blocking with timeout).
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        s.connect((ip, port))   # if device accepts TCP on that port
+        s.close()
+        return jsonify({"success": True, "message": f"Connected to {ip}:{port}"})
+    except Exception as e:
+        # If TCP connect fails, return success anyway but note failure (many devices only speak UDP)
+        return jsonify({"success": False, "message": f"Could not connect to {ip}:{port} ({e})"}), 502
+
+
+# ----- ensure discovery listener starts at app startup (if not already started) -----
+def ensure_discovery_listener_started():
+    """
+    Call this once during app startup so listener runs in background.
+    """
+    try:
+        # check if already running: look for a global flag
+        if not globals().get("_DISCOVERY_LISTENER_STARTED"):
+            t = threading.Thread(target=lambda: discovery_listener(STOP_EVENT, bind_ip="0.0.0.0", port=UDP_PORT), daemon=True)
+            t.start()
+            globals()["_DISCOVERY_LISTENER_STARTED"] = True
+            print("[DISCOVERY] listener thread started on port", UDP_PORT)
+    except Exception as e:
+        print("[DISCOVERY] could not start listener:", e)
+
+# Call ensure_discovery_listener_started() at the end of your app startup sequence (after get_db_connection available).
+# For example, place this near the bottom of the file where you start other background tasks:
+try:
+    ensure_discovery_listener_started()
+except Exception:
+    pass
+
 
 @app.route("/api/discovery/list", methods=["GET"])
 def api_discovery_list():
