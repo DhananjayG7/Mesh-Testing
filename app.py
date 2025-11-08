@@ -343,8 +343,10 @@ def create_users_table():
         ip TEXT PRIMARY KEY,
         device_id TEXT,
         name TEXT,
-        port INTEGER
-    )
+        port INTEGER,
+        last_seen TEXT DEFAULT (datetime('now'))
+);
+
     """)
 
     # udp_queue (store outgoing reliable UDP messages)
@@ -3782,6 +3784,48 @@ def discovery_page():
     Template references BRAND_LOGO injected by your existing inject_brand() context processor.
     """
     return render_template("discovery.html")
+
+def discovery_broadcast_once(bcast_ip="255.255.255.255", port=UDP_PORT, timeout=0.5):
+    """
+    Send a UDP broadcast *from* the discovery port so replies land back on our listener.
+    """
+    import socket, json, time
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # allow reuse so we can bind to same port as listener (if already bound)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        # Try to allow multiple processes to bind on same port (platform dependent)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except Exception:
+            pass
+        # Make this a broadcast-capable socket
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Bind the socket to the DISCOVERY port so replies return to our listener
+        s.bind(("0.0.0.0", int(port)))
+    except Exception as e:
+        # If bind fails (rare, maybe listener already bound without SO_REUSEADDR), fall back but log
+        print("[DISCOVERY] warning: could not bind sender socket to port", port, ":", e)
+
+    try:
+        payload = {
+            "type": "discover",
+            "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
+            "name": get_setting("device_name", "Ethos Device"),
+            "port": int(port),
+            "ts": _now_iso()
+        }
+        pkt = json.dumps(payload).encode('utf-8')
+        # send to broadcast address
+        s.sendto(pkt, (bcast_ip, int(port)))
+        # also send to subnet-directed broadcast if desired (example 192.168.1.255)
+        # you can compute interface brd and send there too if needed
+        time.sleep(timeout)
+    finally:
+        try:
+            s.close()
+        except:
+            pass
 
 
 @app.route("/api/discovery/scan", methods=["POST"])
