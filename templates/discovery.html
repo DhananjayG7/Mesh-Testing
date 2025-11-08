@@ -1,453 +1,64 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Device Discovery — Ethos device</title>
-  <link rel="stylesheet" href="/static/css/styles.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <title>Device Discovery Network</title>
   <style>
-    :root{
-      --sb-inset-right: 18px;
-      --sb-width: 16px;
-      --sb-radius: 10px;
-      --header-max: 900px;
-      --btn-pad: 8px 10px;
-      --btn-font: 13px;
-    }
-    html,body{
-      height:100%;
-      margin:0;
-      background:#f9f6ef;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-      overflow:hidden;
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
-    }
-
-    /* Header */
-    .header{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      padding:10px 12px;
-      width:100%;
-      max-width:var(--header-max);
-      margin:0 auto;
-      box-sizing:border-box;
-      gap:8px;
-    }
-    .left{
-      display:flex; align-items:center; gap:8px;
-      min-width:64px;
-    }
-    .menu-back-btn{
-      display:inline-flex; align-items:center; gap:8px;
-      background:transparent; border:1px solid rgba(32,80,129,0.08);
-      color:#205081; padding:6px 10px; border-radius:10px; cursor:pointer; font-weight:700;
-      font-size:13px;
-    }
-    .logo-main{ height:36px; }
-    .brand-name{ font-weight:800; color:#205081; font-size:1rem; margin-left:10px; letter-spacing:0.2px; }
-    .logo-right{ height:28px; }
-
-    .scroll-area{
-      position:relative;
-      width:100%;
-      height:calc(100vh - 72px);
-      overflow-y:auto;
-      overscroll-behavior:contain;
-      padding:14px;
-      box-sizing:border-box;
-    }
-
-    .card{
-      max-width:1100px;
-      margin:0 auto;
-      background:#fff;
-      border-radius:12px;
-      padding:12px;
-      box-shadow:0 6px 18px rgba(13,30,60,0.06);
-    }
-
-    .controls{
-      display:flex;
-      gap:8px;
-      align-items:center;
-      margin-bottom:12px;
-      flex-wrap:wrap;
-    }
-
-    /* Buttons */
-    .btn{
-      background:#205081;
-      color:#fff;
-      padding:var(--btn-pad);
-      border-radius:8px;
-      border:none;
-      cursor:pointer;
-      font-weight:600;
-      font-size:var(--btn-font);
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-    }
-    .btn.secondary{
-      background:transparent;
-      color:#205081;
-      border:1px solid #e6eef8;
-    }
-    .btn.warn{ background:#FF7A3D; color:#fff; }
-    .btn.ghost{ background:transparent; color:#205081; border:1px dashed rgba(32,80,129,0.12); }
-
-    /* Table */
-    .table-wrap{
-      width:100%;
-      overflow-x:auto; /* allow horizontal scroll on small screens */
-      -webkit-overflow-scrolling:touch;
-    }
-    table{
-      width:100%;
-      border-collapse:collapse;
-      margin-top:8px;
-      min-width:720px; /* force scroll on narrow screens, prevents button wrap issues inside cells */
-    }
-    th, td{
-      text-align:left;
-      padding:10px 8px;
-      border-bottom:1px solid #f0f3f7;
-      font-size:13px;
-      vertical-align:middle;
-    }
-    th{
-      color:#53637a;
-      font-weight:700;
-      font-size:12px;
-      text-transform:uppercase;
-      letter-spacing:0.6px;
-    }
-
-    /* Action buttons in row: compact and wrap within their container */
-    .row-actions{
-      display:flex;
-      gap:6px;
-      align-items:center;
-      flex-wrap:wrap;
-      justify-content:flex-end;
-    }
-    .row-actions .btn{
-      padding:6px 8px;
-      font-size:12px;
-      white-space:nowrap;
-    }
-
-    .status-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; }
-    .online{ background:#18b16a; }
-    .offline{ background:#d1d5da; }
-    .muted{ color:#8d9bb3; font-size:12px; }
-
-    #lastScan{ margin-top:8px; color:#6d7f93; font-size:13px; }
-
-    .custom-scroll{
-      position:fixed;
-      right:var(--sb-inset-right);
-      width:var(--sb-width);
-      top:72px;
-      height:calc(100vh - 72px);
-      z-index:9999;
-      display:none;
-      background:rgba(0,0,0,0.06);
-      border-radius:var(--sb-radius);
-      box-sizing:border-box;
-    }
-    .custom-thumb{
-      position:absolute;
-      left:2px; right:2px; top:0; height:60px;
-      background:#bfbfbf;
-      border-radius:calc(var(--sb-radius) - 2px);
-      box-shadow:0 1px 2px rgba(0,0,0,0.25);
-      cursor:grab; touch-action:none;
-    }
-
-    /* toast */
-    #statusToast{
-      position:fixed; right:12px; top:84px; z-index:99999;
-      background:rgba(0,0,0,0.75); color:#fff; padding:8px 12px; border-radius:8px;
-      display:none; font-weight:600; font-size:13px;
-    }
-
-    /* small screens portrait tweaks */
-    @media (max-width:480px) {
-      :root{ --sb-inset-right: 10px; --sb-width: 12px; --btn-font: 12px; }
-      .header{ padding:8px 10px; }
-      .menu-back-btn{ padding:6px 8px; font-size:12px; }
-      .logo-main{ height:32px; }
-      .brand-name{ display:none; }
-      .logo-right{ height:24px; }
-      .card{ padding:10px; border-radius:10px; }
-      .controls{ justify-content:flex-start; gap:6px; }
-      .controls .group{
-        display:flex; gap:6px; align-items:center;
-      }
-      /* Make the main action buttons slightly smaller and stacked if needed */
-      .btn{ padding:6px 8px; font-size:12px; }
-      table{ min-width:640px; } /* allow slightly narrower tables for small screens */
-      th, td{ padding:8px 6px; font-size:12px; }
-      .row-actions .btn{ padding:6px 6px; font-size:11px; }
-    }
+    body { font-family: Arial; padding: 20px; }
+    .device { padding: 10px; border: 1px solid #ccc; margin: 5px 0; border-radius: 6px; }
+    .online { background: #d4ffd4; }
+    .offline { background: #ffd4d4; }
+    button { padding: 8px 12px; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <div class="header" id="pageHeader">
-    <div class="left">
-      <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
-    </div>
 
-    <div style="flex:1; display:flex; align-items:center; justify-content:center;">
-      <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
-    </div>
+<h2>🔍 Device Network Discovery</h2>
 
-    <div class="right" style="display:flex; align-items:center; gap:8px;">
-      <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
-    </div>
-  </div>
+<button onclick="discover()">Scan for Devices</button>
+<button onclick="saveNetwork()">Save Network</button>
 
-  <div class="scroll-area" id="scrollArea" aria-label="Discovery content">
-    <div class="card">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-        <div>
-          <h2 style="margin:6px 0 2px 0; color:#205081; font-size:16px;">Device Discovery &amp; Dashboard</h2>
-          <div class="muted" style="font-size:13px;">Scan your network for devices, pair a target, push user syncs, connect to a device, or remove entries.</div>
-        </div>
+<div id="deviceList"></div>
 
-        <!-- Controls group: Scan / Refresh / Auto refresh placed together -->
-        <div class="controls" style="margin-left:auto;">
-          <div class="group">
-            <button id="btnScan" class="btn"><i class="fa-solid fa-wifi"></i> Scan</button>
-            <button id="btnRefresh" class="btn secondary"><i class="fa-solid fa-rotate"></i> Refresh</button>
-            <!-- Auto refresh moved here -->
-            <button id="btnAutoRefresh" class="btn ghost" title="Toggle auto refresh">Auto: Off</button>
-          </div>
-        </div>
-      </div>
+<script>
+let devices = [];
 
-      <div class="table-wrap" aria-live="polite" style="margin-top:12px;">
-        <table id="devicesTable">
-          <thead>
-            <tr>
-              <th>IP</th>
-              <th>Device ID</th>
-              <th>Device Name</th>
-              <th>Port</th>
-              <th>Status</th>
-              <th style="width:240px">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td colspan="6" class="muted">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
+async function discover() {
+  document.getElementById("deviceList").innerHTML = "Scanning...";
+  let res = await fetch("/api/discover_now");
+  let data = await res.json();
 
-      <div id="lastScan" class="muted small">Last scan: never</div>
-    </div>
-  </div>
+  devices = data.devices || [];
+  let html = "";
 
-  <div id="statusToast" role="status" aria-live="polite"></div>
+  devices.forEach(d => {
+    let last = (Date.now()/1000) - d.last_seen;
+    let isOnline = last < 5; // active in last 5 sec
+    html += `
+      <div class="device ${isOnline ? "online" : "offline"}">
+        <input type="checkbox" value="${d.ip}" />
+        <b>${d.ip}</b> - ${isOnline ? "🟢 Online" : "🔴 Offline"}
+        <br/>
+        <small>Last Seen: ${last.toFixed(1)} sec ago</small>
+      </div>`;
+  });
 
-  <div class="custom-scroll" id="customScroll" aria-hidden="true">
-    <div class="custom-thumb" id="customThumb"></div>
-  </div>
+  document.getElementById("deviceList").innerHTML = html;
+}
 
-  <script>
-    // toast helper
-    function toast(msg, ms=1800){
-      const t = document.getElementById('statusToast');
-      t.textContent = msg;
-      t.style.display = "block";
-      clearTimeout(t._to);
-      t._to = setTimeout(()=> t.style.display = "none", ms);
-    }
+async function saveNetwork() {
+  let selected = [...document.querySelectorAll("input[type=checkbox]:checked")].map(i => i.value);
 
-    const $ = s=>document.querySelector(s);
-    const api = async (path, opts)=> {
-      const r = await fetch(path, opts);
-      try { return await r.json(); } catch(e){ return null; }
-    };
+  await fetch("/api/save_mesh_devices", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({devices: selected})
+  });
 
-    let autoRefresh = false;
-    let autoRefreshTimer = null;
+  alert("✅ Network Saved: " + selected.join(", "));
+}
 
-    function setAutoRefresh(on){
-      autoRefresh = !!on;
-      const btn = document.getElementById('btnAutoRefresh');
-      btn.textContent = autoRefresh ? 'Auto: On' : 'Auto: Off';
-      if(autoRefresh){
-        autoRefreshTimer = setInterval(loadDevices, 5000);
-        btn.classList.remove('ghost'); btn.classList.add('btn');
-      } else {
-        clearInterval(autoRefreshTimer);
-        autoRefreshTimer = null;
-        btn.classList.remove('btn'); btn.classList.add('btn','ghost');
-      }
-    }
+discover();
+</script>
 
-    document.getElementById('btnAutoRefresh').addEventListener('click', ()=>{
-      setAutoRefresh(!autoRefresh);
-      toast('Auto refresh ' + (autoRefresh ? 'enabled' : 'disabled'));
-    });
-
-    function renderDevices(rows){
-      const tbody = document.querySelector("#devicesTable tbody");
-      tbody.innerHTML = "";
-      if(!rows || rows.length===0){
-        tbody.innerHTML = `<tr><td colspan="6" class="muted">No devices discovered yet. Click "Scan".</td></tr>`;
-        return;
-      }
-      rows.forEach(d=>{
-        const tr = document.createElement("tr");
-        const ip = d.ip || "";
-        const devId = d.device_id || "";
-        const name = d.name || "";
-        const port = d.port || 5006;
-        const last = d.last_seen || "";
-        const isOnline = (last && last.length>0) || !!d.status || true;
-        const statusHtml = `<span class="status-dot ${isOnline ? "online":"offline"}"></span><span class="muted">${isOnline ? (last || "online") : "offline"}</span>`;
-
-        tr.innerHTML = `
-          <td><strong>${ip}</strong></td>
-          <td>${devId}</td>
-          <td>${name}</td>
-          <td>${port}</td>
-          <td>${statusHtml}</td>
-          <td>
-            <div class="row-actions" role="group" aria-label="actions">
-              <button class="btn" onclick="connectDevice('${ip}')" title="Connect"><i class="fa-solid fa-plug"></i> Connect</button>
-              <button class="btn" onclick="pairDevice('${ip}')"><i class="fa-solid fa-user-plus"></i> Pair</button>
-              <button class="btn secondary" onclick="syncDevice('${ip}')"><i class="fa-solid fa-sync"></i> Sync</button>
-              <button class="btn warn" onclick="removeDevice('${ip}')"><i class="fa-solid fa-trash"></i> Remove</button>
-            </div>
-          </td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
-
-    async function loadDevices(){
-      const refreshBtn = document.getElementById('btnRefresh');
-      refreshBtn.disabled = true;
-      refreshBtn.textContent = "Loading…";
-      const res = await api("/api/discovery/list");
-      if(res && res.success){ renderDevices(res.devices); } else { renderDevices([]); }
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = "Refresh";
-    }
-
-    async function scanNetwork(){
-      const btn = document.getElementById('btnScan');
-      btn.disabled = true;
-      btn.textContent = "Scanning…";
-      const res = await api("/api/discovery/scan", { method: "POST" });
-      const now = new Date().toLocaleString();
-      document.getElementById("lastScan").textContent = "Last scan: " + now;
-      btn.disabled = false;
-      btn.textContent = "Scan";
-      setTimeout(loadDevices, 1200);
-      if(res && res.success) toast('Scan started');
-      else toast('Scan failed');
-    }
-
-    async function connectDevice(ip){
-      if(!confirm("Connect to " + ip + " ?")) return;
-      try{
-        const res = await api("/api/discovery/connect", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-        if(res && res.success){
-          toast("Connected to " + ip);
-          if(res.url) window.location.href = res.url;
-        } else {
-          toast("Connect failed: " + (res && res.message ? res.message : 'unknown'));
-        }
-      }catch(e){
-        toast("Connect error");
-      }
-      loadDevices();
-    }
-
-    async function pairDevice(ip){
-      if(!confirm("Pair with " + ip + "?")) return;
-      const res = await api("/api/discovery/pair", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) toast("Paired " + ip);
-      else toast("Pair failed");
-      loadDevices();
-    }
-
-    async function syncDevice(ip){
-      if(!confirm("Push users to " + ip + " now?")) return;
-      const res = await api("/api/discovery/sync", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) toast("Sync enqueued to " + ip);
-      else toast("Sync failed");
-      loadDevices();
-    }
-
-    async function removeDevice(ip){
-      if(!confirm("Remove " + ip + " ?")) return;
-      const res = await api("/api/discovery/remove", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) toast("Removed " + ip);
-      else toast("Remove failed");
-      loadDevices();
-    }
-
-    document.getElementById("btnScan").addEventListener("click", scanNetwork);
-    document.getElementById("btnRefresh").addEventListener("click", loadDevices);
-
-    // start with a single load and auto-scan the network when page opens
-    loadDevices().then(()=> {
-      // trigger auto-scan so devices appear quickly
-      scanNetwork();
-    });
-
-    // scrollbar logic (same as menu)
-    (function (){
-      const area   = document.getElementById('scrollArea');
-      const header = document.getElementById('pageHeader');
-      const track  = document.getElementById('customScroll');
-      const thumb  = document.getElementById('customThumb');
-      let dragging=false, startY=0, startScrollTop=0;
-      const clamp=(v,min,max)=>Math.max(min,Math.min(max,v));
-
-      function layout(){
-        const rect = header.getBoundingClientRect();
-        const top  = Math.ceil(rect.bottom);
-        const h    = window.innerHeight - top;
-        track.style.top    = top + 'px';
-        track.style.height = h + 'px';
-        area.style.height  = h + 'px';
-        refreshThumb();
-        toggleTrack();
-      }
-      function toggleTrack(){ track.style.display = (area.scrollHeight > area.clientHeight + 1) ? 'block' : 'none'; }
-      function refreshThumb(){
-        const trackH    = track.clientHeight;
-        const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
-        const ratio   = area.clientHeight / (area.scrollHeight || 1);
-        const minThumb = 48;
-        const th      = Math.max(minThumb, Math.round(trackH * ratio));
-        thumb.style.height = Math.min(th, trackH) + 'px';
-        const maxTop   = trackH - thumb.offsetHeight;
-        const sTop     = area.scrollTop;
-        const tTop     = maxTop && maxScroll ? (sTop / maxScroll) * maxTop : 0;
-        thumb.style.transform = 'translateY(' + tTop + 'px)';
-      }
-      thumb.addEventListener('pointerdown', e=>{ dragging=true; thumb.setPointerCapture(e.pointerId); startY=e.clientY; startScrollTop=area.scrollTop; e.preventDefault(); });
-      thumb.addEventListener('pointermove', e=>{ if(!dragging) return; const trackH = track.clientHeight; const th = thumb.offsetHeight; const maxTop = Math.max(1, trackH - th); const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight); const deltaY = e.clientY - startY; const scrollPerPixel = maxScroll / maxTop; area.scrollTop = Math.max(0, Math.min(startScrollTop + deltaY * scrollPerPixel, maxScroll)); });
-      function endDrag(e){ if(!dragging) return; dragging=false; try{ thumb.releasePointerCapture(e.pointerId); }catch(_){ } }
-      thumb.addEventListener('pointerup', endDrag); thumb.addEventListener('pointercancel', endDrag); thumb.addEventListener('lostpointercapture', ()=> dragging=false);
-      track.addEventListener('pointerdown', e=>{ if(e.target !== track) return; const rect = track.getBoundingClientRect(); const clickY = e.clientY - rect.top; const th = thumb.offsetHeight; const trackH = track.clientHeight; const maxTop = Math.max(1, trackH - th); const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight); const targetTop = Math.max(0, Math.min(clickY - th/2, maxTop)); const targetScroll = (targetTop / maxTop) * maxScroll; area.scrollTop = targetScroll; });
-      area.addEventListener('scroll', refreshThumb, {passive:true});
-      window.addEventListener('resize', layout);
-      window.addEventListener('load', layout);
-      setTimeout(layout,300);
-    })();
-  </script>
 </body>
 </html>

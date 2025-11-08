@@ -101,12 +101,6 @@ def run_parallel(*targets):
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = "supersecret"  # required for session
 
-# --- UDP / mesh constants (must be defined before DB init that creates udp_queue) ---
-UDP_PORT = int(os.environ.get("UDP_PORT", "5006"))  # choose same port for all devices
-UDP_CHUNK_SIZE = int(os.environ.get("UDP_CHUNK_SIZE", "1200"))  # safe payload chunk size
-UDP_ACK_TIMEOUT = float(os.environ.get("UDP_ACK_TIMEOUT", "2.0"))
-UDP_MAX_RETRIES = int(os.environ.get("UDP_MAX_RETRIES", "6"))
-
 # Branding (used in templates)
 app.config.update(
     BRAND_NAME=os.environ.get("BRAND_NAME", "Canteen Kiosk"),
@@ -186,6 +180,7 @@ def api_thankyou_events():
 # -----------------------------------------------------------------------------
 ADMIN_PW_FILE = "admin_pw.txt"
 DB_PATH = "users.db"
+USERS_IMG_DIR = "./users_img"
 
 # --- Prevent client/proxy caching for all JSON endpoints and streams ---
 @app.after_request
@@ -203,8 +198,6 @@ def create_users_table():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-
-    # core users + related tables
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         emp_id TEXT PRIMARY KEY,
@@ -213,8 +206,7 @@ def create_users_table():
         face_encoding BLOB,
         rfid_cards TEXT,
         role TEXT DEFAULT 'User',
-        birthdate TEXT,
-        template_id INTEGER
+        birthdate TEXT
     )
     """)
     c.execute('''CREATE TABLE IF NOT EXISTS shifts (
@@ -243,21 +235,21 @@ def create_users_table():
         item_name TEXT NOT NULL,
         FOREIGN KEY (menu_code) REFERENCES menu_codes(menu_code) ON DELETE CASCADE
     )''')
+    # legacy duplicate; kept to avoid breaking your existing code
     c.execute('''CREATE TABLE IF NOT EXISTS item_limits (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         category TEXT NOT NULL,
         item_name TEXT NOT NULL,
         item_limit INTEGER NOT NULL
     )''')
-
-    # fingerprints table (unified)
+    # fingerprints table in users.db
     c.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
         id INTEGER PRIMARY KEY,
         username TEXT,
         template BLOB NOT NULL
     )''')
 
-    # local queue for PG events (offline-first)
+    # Local queue for PG events (offline-first)
     c.execute("""
     CREATE TABLE IF NOT EXISTS pg_event_queue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,8 +288,7 @@ def create_users_table():
         order_time TEXT NOT NULL
     )
     """)
-
-    # slot-limit tables
+    # slot-limit tables (per user and defaults)
     c.execute("""
     CREATE TABLE IF NOT EXISTS user_slot_limits (
         emp_id          TEXT NOT NULL,
@@ -319,7 +310,7 @@ def create_users_table():
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_orders_emp_cat_time ON orders(emp_id, category, order_time)")
 
-    # mapping table (emp_id -> template_id)
+    # mapping table (emp_id -> auto-incremental template_id)
     c.execute("""
     CREATE TABLE IF NOT EXISTS user_finger_map (
         emp_id      TEXT PRIMARY KEY,
@@ -327,76 +318,11 @@ def create_users_table():
     )
     """)
 
-    # canonical fingerprint_map table
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS fingerprint_map(
-        emp_id TEXT PRIMARY KEY,
-        template_id INTEGER UNIQUE NOT NULL,
-        name TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-    )
-    """)
-
-    # mesh devices table (needed by enqueue_sync_to_all_devices)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS mesh_devices (
-        ip TEXT PRIMARY KEY,
-        device_id TEXT,
-        name TEXT,
-        port INTEGER,
-        last_seen TEXT DEFAULT (datetime('now'))
-);
-
-    """)
-
-    # udp_queue (store outgoing reliable UDP messages)
-    c.execute(f"""
-    CREATE TABLE IF NOT EXISTS udp_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at TEXT NOT NULL,
-        device_ip TEXT NOT NULL,
-        device_port INTEGER NOT NULL DEFAULT {UDP_PORT},
-        message_id TEXT NOT NULL,
-        message_type TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_attempt TEXT,
-        last_error TEXT
-    )
-    """)
-
     conn.commit()
     conn.close()
 
 
-def ensure_logs_table():
-    try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_time TEXT NOT NULL,
-            device_ip TEXT,
-            emp_id TEXT,
-            name TEXT,
-            role TEXT,
-            medium TEXT,
-            success INTEGER,
-            payload TEXT
-        )
-        """)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print("[DB] ensure_logs_table error:", e)
-
-
-
-# create tables and ensure optional helper tables exist
-
-
+create_users_table()
 
 def has_column(table: str, column: str) -> bool:
     conn = get_db_connection()
@@ -470,190 +396,6 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-
-# --- Mesh discovery helpers (place after get_db_connection and schema setup) ---
-import math, uuid, socket
-
-UDP_PORT = 5006              # choose same port for all devices
-UDP_CHUNK_SIZE = 1200        # safe payload chunk size
-UDP_ACK_TIMEOUT = 2.0
-UDP_MAX_RETRIES = 6
-
-def discovery_broadcast_once(bcast_ip='<broadcast>', port=UDP_PORT):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    pkt = {
-        "type": "discover",
-        "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
-        "name": get_setting("device_name", None),
-        "port": port,
-        "ts": _now_iso()
-    }
-    try:
-        s.sendto(json.dumps(pkt).encode('utf-8'), (bcast_ip, port))
-    finally:
-        s.close()
-
-def discovery_listener(stop_evt, bind_ip='0.0.0.0', port=UDP_PORT):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind((bind_ip, port))
-    s.settimeout(1.0)
-    while not stop_evt.is_set():
-        try:
-            data, addr = s.recvfrom(65536)
-            ip = addr[0]
-            try:
-                j = json.loads(data.decode('utf-8', errors='ignore'))
-            except Exception:
-                continue
-            if j.get("type") == "discover":
-                # reply hello
-                hello = {"type":"device_hello", "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
-                         "name": get_setting("device_name","CanteenDevice"), "port": port, "ts": _now_iso()}
-                s.sendto(json.dumps(hello).encode('utf-8'), addr)
-            elif j.get("type") == "device_hello":
-                device_id = j.get("device_id")
-                name = j.get("name") or device_id
-                conn = get_db_connection()
-                try:
-                    conn.execute("INSERT OR REPLACE INTO mesh_devices (ip, device_id, name, port) VALUES (?, ?, ?, ?)",
-                                 (ip, device_id, name, int(j.get("port", port))))
-                    conn.commit()
-                finally:
-                    conn.close()
-        except socket.timeout:
-            continue
-        except Exception:
-            time.sleep(0.05)
-    try: s.close()
-    except Exception: pass
-
-
-# --- Reliable-enqueue (high level) ---
-def reliable_udp_send_to(ip: str, port: int, payload: dict, message_type: str="generic"):
-    """
-    Persist a message into udp_queue (so worker can send reliably).
-    Returns message_id.
-    """
-    mid = str(uuid.uuid4())
-    conn = get_db_connection()
-    try:
-        conn.execute(
-            "INSERT INTO udp_queue (created_at, device_ip, device_port, message_id, message_type, payload, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (_now_iso(), ip, port, mid, message_type, json.dumps(payload), 'pending')
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return mid
-
-def enqueue_sync_to_all_devices(message_type: str, payload: dict):
-    """
-    Enqueue this payload to all devices currently in mesh_devices table.
-    Call this after DB commit in registration/edit/delete endpoints.
-    """
-    conn = get_db_connection()
-    try:
-        rows = conn.execute("SELECT ip, port FROM mesh_devices").fetchall()
-        for r in rows:
-            try:
-                reliable_udp_send_to(r["ip"], int(r["port"] or UDP_PORT), payload, message_type)
-            except Exception as e:
-                print("[ENQUEUE] failed for", r["ip"], e)
-    finally:
-        conn.close()
-
-
-# --- UDP queue worker: chunk + send + wait for ACK ---
-def _build_chunks(message_id: str, payload_bytes: bytes):
-    total = math.ceil(len(payload_bytes) / UDP_CHUNK_SIZE) or 1
-    chunks = []
-    for i in range(total):
-        start = i * UDP_CHUNK_SIZE
-        chunk_payload = payload_bytes[start:start + UDP_CHUNK_SIZE]
-        header = json.dumps({"type":"chunk","message_id":message_id,"chunk_index":i,"total_chunks":total}).encode('utf-8') + b"\n"
-        chunks.append(header + chunk_payload)
-    return chunks
-
-def udp_queue_worker(stop_evt, poll_interval=1.5):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(0.6)
-    while not stop_evt.is_set():
-        try:
-            conn = get_db_connection()
-            rows = conn.execute("SELECT id, device_ip, device_port, message_id, message_type, payload, attempts FROM udp_queue WHERE status IN ('pending','sending') ORDER BY id ASC LIMIT 20").fetchall()
-            conn.close()
-            if not rows:
-                time.sleep(poll_interval); continue
-            for r in rows:
-                qid = r["id"]; ip = r["device_ip"]; port = int(r["device_port"]); mid = r["message_id"]
-                attempts = int(r["attempts"] or 0)
-                if attempts >= UDP_MAX_RETRIES:
-                    conn = get_db_connection()
-                    try:
-                        conn.execute("UPDATE udp_queue SET status=?, last_attempt=?, last_error=? WHERE id=?", ('failed', _now_iso(), f"max_retries({attempts})", qid))
-                        conn.commit()
-                    finally:
-                        conn.close()
-                    continue
-                # mark sending
-                conn = get_db_connection()
-                try:
-                    conn.execute("UPDATE udp_queue SET status=?, attempts=?, last_attempt=? WHERE id=?", ('sending', attempts+1, _now_iso(), qid))
-                    conn.commit()
-                finally:
-                    conn.close()
-                payload = json.loads(r["payload"])
-                envelope = {"message_id": mid, "type": r["message_type"], "created_at": _now_iso(), "payload": payload}
-                env_bytes = json.dumps(envelope, separators=(',',':')).encode('utf-8')
-                chunks = _build_chunks(mid, env_bytes)
-                try:
-                    for c in chunks:
-                        try: sock.sendto(c, (ip, port))
-                        except Exception: pass
-                        time.sleep(0.03)
-                    # wait for ack
-                    acked = False
-                    tstart = time.time()
-                    while time.time() - tstart < UDP_ACK_TIMEOUT * 2:
-                        try:
-                            data, addr = sock.recvfrom(4096)
-                            try: j = json.loads(data.decode('utf-8', errors='ignore'))
-                            except Exception: continue
-                            if j.get("type") == "ack" and j.get("message_id") == mid:
-                                acked = True; break
-                        except socket.timeout:
-                            pass
-                    if acked:
-                        conn = get_db_connection()
-                        try:
-                            conn.execute("UPDATE udp_queue SET status=?, last_attempt=? WHERE id=?", ('acked', _now_iso(), qid))
-                            conn.commit()
-                        finally:
-                            conn.close()
-                    else:
-                        conn = get_db_connection()
-                        try:
-                            conn.execute("UPDATE udp_queue SET status=?, last_attempt=? WHERE id=?", ('pending', _now_iso(), qid))
-                            conn.commit()
-                        finally:
-                            conn.close()
-                except Exception as e:
-                    conn = get_db_connection()
-                    try:
-                        conn.execute("UPDATE udp_queue SET status=?, last_attempt=?, last_error=? WHERE id=?", ('pending', _now_iso(), str(e), qid))
-                        conn.commit()
-                    finally:
-                        conn.close()
-        except Exception:
-            time.sleep(0.5)
-    try: sock.close()
-    except Exception: pass
-
-
-
 # ========= NEW: ensure logs table =========
 def ensure_logs_table():
     try:
@@ -699,11 +441,373 @@ def set_setting(key, value):
     conn.commit()
     conn.close()
 
+import socket
+import threading
+import json
+import uuid
+import time
+from datetime import datetime
 
-create_users_table()
-ensure_logs_table()
-migrate_sqlite_schema()
-ensure_schema_migrations()
+
+UDP_PORT = 5006
+BROADCAST_ADDR = "255.255.255.255"
+UDP_SEND_TIMEOUT = 0.6
+
+# In-memory structures
+KNOWN_DEVICES = {}           # ip -> {"ip": ip, "last_seen": ts, "info": {...}}
+KNOWN_DEVICES_LOCK = threading.Lock()
+_ACKED_MSGS = set()
+_ACKED_MSGS_LOCK = threading.Lock()
+
+# persistent queue (sqlite) table name
+UDP_QUEUE_TABLE = "udp_queue"
+
+def ensure_udp_queue_table():
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"""
+        CREATE TABLE IF NOT EXISTS {UDP_QUEUE_TABLE} (
+            id TEXT PRIMARY KEY,
+            target_ip TEXT,
+            payload TEXT,
+            retries INTEGER DEFAULT 0,
+            last_sent REAL DEFAULT 0
+        )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("[UDP] ensure table error:", e)
+
+def get_self_ip():
+    """Return best-effort LAN IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def _make_send_socket():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    s.settimeout(UDP_SEND_TIMEOUT)
+    return s
+
+def _make_listen_socket():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(('', UDP_PORT))
+    except Exception:
+        # fallback bind to localhost
+        s.bind(('0.0.0.0', UDP_PORT))
+    s.settimeout(1.0)
+    return s
+
+def _insert_queue_item(msg_id, target_ip, payload_json):
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"INSERT OR REPLACE INTO {UDP_QUEUE_TABLE} (id, target_ip, payload, retries, last_sent) VALUES (?, ?, ?, coalesce((SELECT retries FROM {UDP_QUEUE_TABLE} WHERE id=?), 0), ?)",
+                  (msg_id, target_ip or "", payload_json, msg_id, 0.0))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("[UDP] insert queue error:", e)
+
+def _delete_queue_item(msg_id):
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"DELETE FROM {UDP_QUEUE_TABLE} WHERE id=?", (msg_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("[UDP] delete queue error:", e)
+
+def send_reliable(payload: dict, targets=None, max_retries=5, retry_interval=1.0):
+    """
+    Enqueue payload(s) for reliable UDP delivery.
+    - payload: dict (will be JSON-serialized). The function adds _msg_id and _from fields.
+    - targets: list of IPs (strings). If None -> broadcast address will be used.
+    Returns generated msg_id (string) or list of msg_ids for multiple targets.
+    """
+    ensure_udp_queue_table()
+    payload_copy = dict(payload)
+    payload_copy["_msg_id"] = str(uuid.uuid4())
+    payload_copy["_from"] = get_self_ip()
+    payload_json = json.dumps(payload_copy, separators=(',', ':'))
+    msg_ids = []
+    if not targets:
+        # use broadcast
+        msg_id = payload_copy["_msg_id"]
+        _insert_queue_item(msg_id, BROADCAST_ADDR, payload_json)
+        msg_ids.append(msg_id)
+    else:
+        for t in targets:
+            msg_id = str(uuid.uuid4())
+            p = dict(payload_copy)
+            p["_msg_id"] = msg_id
+            payload_json_t = json.dumps(p, separators=(',', ':'))
+            _insert_queue_item(msg_id, t, payload_json_t)
+            msg_ids.append(msg_id)
+    return msg_ids[0] if len(msg_ids)==1 else msg_ids
+
+def _udp_queue_worker():
+    """Background worker that reads pending queue and sends, handles ACKs and retries."""
+    send_sock = _make_send_socket()
+    while True:
+        try:
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            c = conn.cursor()
+            # select pending items
+            rows = c.execute(f"SELECT id, target_ip, payload, retries, last_sent FROM {UDP_QUEUE_TABLE} ORDER BY last_sent ASC LIMIT 50").fetchall()
+            conn.close()
+            now = time.time()
+            for row in rows:
+                msg_id, target_ip, payload_json, retries, last_sent = row
+                # simple backoff: don't resend too quickly
+                if now - last_sent < (retry_interval := (1.0 + retries*0.5)):
+                    continue
+                if retries >= 20:
+                    # drop after too many retries
+                    print(f"[UDP] dropping msg {msg_id} after {retries} retries")
+                    _delete_queue_item(msg_id)
+                    continue
+                # send packet
+                try:
+                    addr = target_ip or BROADCAST_ADDR
+                    send_sock.sendto(payload_json.encode('utf-8'), (addr, UDP_PORT))
+                except Exception as e:
+                    # log and continue - update retries
+                    pass
+                # update retries and last_sent
+                try:
+                    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    c = conn.cursor()
+                    c.execute(f"UPDATE {UDP_QUEUE_TABLE} SET retries=retries+1, last_sent=? WHERE id=?", (time.time(), msg_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                # short sleep to avoid flooding
+                time.sleep(0.02)
+            # purge acknowledged messages from the queue
+            with _ACKED_MSGS_LOCK:
+                acked = list(_ACKED_MSGS)
+            for ack_id in acked:
+                _delete_queue_item(ack_id)
+                with _ACKED_MSGS_LOCK:
+                    if ack_id in _ACKED_MSGS:
+                        _ACKED_MSGS.remove(ack_id)
+            time.sleep(0.8)
+        except Exception as e:
+            print("[UDP queue worker] error:", e)
+            time.sleep(1.0)
+
+def _udp_listener_worker():
+    """Background listener: accept messages, update KNOWN_DEVICES, send ACKs, and dispatch payloads."""
+    s = _make_listen_socket()
+    while True:
+        try:
+            data, addr = s.recvfrom(131072)
+            ip = addr[0]
+            now = time.time()
+            try:
+                obj = json.loads(data.decode('utf-8', 'ignore'))
+            except Exception:
+                continue
+            # update known devices
+            with KNOWN_DEVICES_LOCK:
+                KNOWN_DEVICES[ip] = {"ip": ip, "last_seen": now, "info": obj.get("info")}
+            # if it's an ack from remote, mark as acked
+            if obj.get("type") == "udp_ack" and obj.get("ack_id"):
+                ack_id = obj.get("ack_id")
+                with _ACKED_MSGS_LOCK:
+                    _ACKED_MSGS.add(ack_id)
+                continue
+            # send ack back to sender to indicate receipt (for reliable senders)
+            try:
+                ack = {"type": "udp_ack", "ack_id": obj.get("_msg_id"), "from": get_self_ip()}
+                s.sendto(json.dumps(ack, separators=(',', ':')).encode('utf-8'), (ip, UDP_PORT))
+            except Exception:
+                pass
+            # dispatch payload for local handling (don't process our own messages)
+            if obj.get("_from") == get_self_ip():
+                continue
+            # handle types: finger_register, user_register, user_edit, user_delete, user_login, rfid_register, etc.
+            try:
+                threading.Thread(target=_apply_incoming_payload, args=(obj,), daemon=True).start()
+            except Exception:
+                pass
+        except socket.timeout:
+            continue
+        except Exception as e:
+            print("[UDP listener] error:", e)
+            time.sleep(0.5)
+
+def _apply_incoming_payload(payload: dict):
+    """Apply incoming payloads to local DB. This is minimal and safe; expand as needed."""
+    try:
+        t = payload.get("type")
+        if not t:
+            return
+        # ignore messages from ourselves (already filtered at caller)
+        # handle fingerprint register: expects 'user_id' and 'template' (base64)
+        if t == "finger_register":
+            try:
+                import base64
+                tpl_b64 = payload.get("template")
+                tid = payload.get("user_id")
+                username = payload.get("username") or ""
+                if tpl_b64 and tid:
+                    db = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    db.execute("INSERT OR REPLACE INTO fingerprints (id, username, template) VALUES (?, ?, ?)",
+                               (int(tid), username or "", sqlite3.Binary(base64.b64decode(tpl_b64))))
+                    db.commit()
+                    db.close()
+            except Exception as e:
+                print("[UDP apply finger] error:", e)
+        elif t in ("user_register", "user_edit", "user_delete"):
+            try:
+                emp_id = payload.get("emp_id")
+                name = payload.get("name")
+                face_enc_b64 = payload.get("face_encoding")
+                display_img_b64 = payload.get("display_image")
+                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                c = conn.cursor()
+                c.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB)")
+                if t == "user_delete":
+                    c.execute("DELETE FROM users WHERE emp_id=?", (emp_id,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO users (emp_id, name) VALUES (?, ?)", (emp_id, name or ""))
+                    if name is not None:
+                        c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
+                    if face_enc_b64:
+                        try:
+                            enc_bytes = base64.b64decode(face_enc_b64)
+                            c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", (enc_bytes, emp_id))
+                        except Exception:
+                            pass
+                    if display_img_b64:
+                        try:
+                            img_bytes = base64.b64decode(display_img_b64.split(",")[-1])
+                            c.execute("UPDATE users SET display_image=? WHERE emp_id=?", (sqlite3.Binary(img_bytes), emp_id))
+                        except Exception:
+                            pass
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print("[UDP apply user] error:", e)
+        elif t == "user_login":
+            # optionally log login events locally (not implemented here)
+            pass
+        # add other types as needed
+    except Exception as e:
+        print("[UDP apply payload] error:", e)
+
+# start background threads
+try:
+    ensure_udp_queue_table()
+    t_q = threading.Thread(target=_udp_queue_worker, daemon=True, name="udp-queue")
+    t_q.start()
+    t_l = threading.Thread(target=_udp_listener_worker, daemon=True, name="udp-listener")
+    t_l.start()
+except Exception as e:
+    print("[UDP] background start error:", e)
+
+# Public API for legacy callers in app:
+def load_mesh_state():
+    """Return currently known devices from listener snapshot."""
+    with KNOWN_DEVICES_LOCK:
+        return {ip: {"ip": info["ip"], "last_seen": info["last_seen"], "info": info.get("info")} for ip, info in KNOWN_DEVICES.items()}
+
+def send_udp_json(target_ip, port, payload):
+    """
+    Backwards-compatible send helper: enqueue payload to single target_ip (or broadcast if target_ip is falsy).
+    Returns True if enqueued.
+    """
+    try:
+        if not target_ip:
+            send_reliable(payload, targets=None)
+        else:
+            send_reliable(payload, targets=[target_ip])
+        return True
+    except Exception:
+        return False
+
+def broadcast_login_udp(emp_id, name, medium):
+    try:
+        p = {"type":"user_login","emp_id":emp_id,"name":name,"medium":medium,"ts":time.time()}
+        send_reliable(p, targets=None)
+    except Exception:
+        pass
+
+def broadcast_login_tcp(emp_id, name, medium):
+    # TCP not used; reuse UDP reliable
+    broadcast_login_udp(emp_id, name, medium)
+
+# discovery endpoints used by UI
+@app.route("/api/devices")
+def api_devices():
+    with KNOWN_DEVICES_LOCK:
+        devices = []
+        for ip, info in KNOWN_DEVICES.items():
+            devices.append({"ip": ip, "last_seen": info["last_seen"], "info": info.get("info")})
+    return jsonify({"devices": devices})
+
+@app.route("/api/discover_now")
+def api_discover_now():
+    # broadcast a short discovery ping and wait ~1s for responses
+    try:
+        ping = {"type":"udp_ping","info":{"name": get_self_ip()},"ts":time.time()}
+        send_reliable(ping, targets=None)
+        time.sleep(1.0)
+    except Exception:
+        pass
+    return api_devices()
+
+@app.route("/api/save_mesh_devices", methods=["POST"])
+def api_save_mesh_devices():
+    data = request.get_json(force=True) or {}
+    ips = data.get("devices") or []
+    try:
+        set_setting("mesh_devices", json.dumps(ips))
+    except Exception:
+        pass
+    return jsonify({"success": True})
+
+# -----------------------------------------------------------------------------
+# Template-ID API (auto-incremental & reserved per emp_id)
+# -----------------------------------------------------------------------------
+@app.route("/api/user_template_id")
+def api_user_template_id():
+    emp_id = (request.args.get("emp_id") or "").strip()
+    if not emp_id:
+        return jsonify({"success": False, "message": "emp_id missing"}), 400
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS user_template_seq (emp_id TEXT PRIMARY KEY, seq INTEGER)")
+        conn.commit()
+        # get current seq
+        c.execute("SELECT seq FROM user_template_seq WHERE emp_id=?", (emp_id,))
+        row = c.fetchone()
+        if row is None:
+            seq = 1
+            c.execute("INSERT INTO user_template_seq (emp_id, seq) VALUES (?,?)", (emp_id, seq))
+        else:
+            seq = row[0] + 1
+            c.execute("UPDATE user_template_seq SET seq=? WHERE emp_id=?", (seq, emp_id))
+        conn.commit()
+        conn.close()
+        return jsonify({"success": True, "template_id": seq})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 # -----------------------------------------------------------------------------
@@ -1259,6 +1363,12 @@ def group_items_for_limits(conn, items_in: list):
 def index():
     return render_template('index.html')
 
+@app.route("/discover")
+def discover_page():
+    return render_template("discovery.html")
+
+
+
 @app.route('/menu')
 def menu():
     session.pop("admin_session_active", None)
@@ -1484,17 +1594,6 @@ def broadcast_login_tcp(emp_id, name, medium):
 # -----------------------------------------------------------------------------
 # Template-ID API (auto-incremental & reserved per emp_id)
 # -----------------------------------------------------------------------------
-@app.route("/api/user_template_id")
-def api_user_template_id():
-    emp_id = (request.args.get("emp_id") or "").strip()
-    if not emp_id:
-        return jsonify({"success": False, "message": "emp_id required"}), 400
-    try:
-        tid, created = get_or_reserve_template_id(emp_id)
-        return jsonify({"success": True, "template_id": tid, "reserved": created})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
 
 # -----------------------------------------------------------------------------
 # User upsert (emp_id, name, role)
@@ -1514,9 +1613,6 @@ def api_user_upsert():
             conn.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
         conn.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
         conn.commit()
-        # after commit in user_upsert:
-        enqueue_sync_to_all_devices("user_upsert", {"emp_id": emp_id, "name": name, "role": role})
-
         tid, _ = get_or_reserve_template_id(emp_id)
         return jsonify({"success": True, "template_id": tid})
     finally:
@@ -1635,7 +1731,7 @@ def check_face_duplicate():
 
 @app.route("/api/face_register", methods=["POST"])
 def face_register():
-    data = request.json or {}
+    data = request.json
     img_data = (data.get("image") or "").split(",")[-1]
     emp_id = (data.get("employee_id") or data.get("emp_id") or "").strip()
     name   = (data.get("name") or "").strip()
@@ -1644,79 +1740,59 @@ def face_register():
     if not img_data or not emp_id:
         return jsonify({"success": False, "message": "image and emp_id required"}), 400
 
+    img_bytes = base64.b64decode(img_data)
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        return jsonify({"success": False, "message": "Image decode failed"})
+    frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+    match = recognizer.find_duplicate(frame)
+    if match:
+        return jsonify({
+            "success": False,
+            "message": f"Face already registered (Emp ID: {match['emp_id']}, Name: {match['name']})"
+        })
+
+    result, encoding_arr = recognizer.save_face(frame)
+    if not result:
+        return jsonify({"success": False, "message": encoding_arr})
+
+    encoding_bytes = encoding_arr.astype(np.float64).tobytes()
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
+    if name:
+        c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
+    c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
+    c.execute("UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
+              (encoding_bytes, img_bytes, emp_id))
+    conn.commit()
+    conn.close()
+    recognizer.load_all_encodings()
+
+    # Mesh sync removed — stubs will safely do nothing
     try:
-        img_bytes = base64.b64decode(img_data)
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if bgr is None:
-            return jsonify({"success": False, "message": "Image decode failed"})
-        frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        state = load_mesh_state()
+        self_ip = get_self_ip()
+        if state.get("devices"):
+            payload = {
+                "type": "face_sync",
+                "emp_id": emp_id,
+                "name": name,
+                "registered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "encoding": base64.b64encode(encoding_bytes).decode(),
+                "display_image": base64.b64encode(img_bytes).decode()
+            }
+            for dev in state.get("devices", []):
+                ip = dev.get("ip")
+                if ip and ip != self_ip:
+                    try: send_udp_json(ip, 5006, payload)
+                    except Exception: pass
+    except Exception:
+        pass
 
-        match = recognizer.find_duplicate(frame)
-        if match:
-            return jsonify({
-                "success": False,
-                "message": f"Face already registered (Emp ID: {match['emp_id']}, Name: {match['name']})"
-            })
-
-        result, encoding_arr = recognizer.save_face(frame)
-        if not result:
-            return jsonify({"success": False, "message": encoding_arr})
-
-        # convert encoding array to bytes for storage
-        encoding_bytes = encoding_arr.astype(np.float64).tobytes()
-
-        conn = get_db_connection()
-        try:
-            c = conn.cursor()
-            c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
-            if name:
-                c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
-            c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
-            c.execute("UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
-                      (sqlite3.Binary(encoding_bytes), sqlite3.Binary(img_bytes), emp_id))
-            conn.commit()
-        finally:
-            conn.close()
-
-        # enqueue a sync to other devices (safe; worker/stub will handle network)
-        payload = {
-            "emp_id": emp_id,
-            "name": name,
-            "encoding": base64.b64encode(encoding_bytes).decode() if encoding_bytes else None,
-            "display_image": base64.b64encode(img_bytes).decode()
-        }
-        enqueue_sync_to_all_devices("face_register", payload)
-
-        recognizer.load_all_encodings()
-
-        # optional: also attempt per-device UDP (stubs are safe)
-        try:
-            state = load_mesh_state()
-            self_ip = get_self_ip()
-            if state.get("devices"):
-                payload2 = {
-                    "type": "face_sync",
-                    "emp_id": emp_id,
-                    "name": name,
-                    "registered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "encoding": base64.b64encode(encoding_bytes).decode(),
-                    "display_image": base64.b64encode(img_bytes).decode()
-                }
-                for dev in state.get("devices", []):
-                    ip = dev.get("ip")
-                    if ip and ip != self_ip:
-                        try:
-                            send_udp_json(ip, 5006, payload2)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-        return jsonify({"success": True, "message": "Face registered successfully."})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
+    return jsonify({"success": True, "message": "Face registered successfully."})
 
 @app.route("/api/face_edit", methods=["POST"])
 def face_edit():
@@ -1748,13 +1824,12 @@ def face_edit():
             if row:
                 encoding_bytes, name, disp_img = row["face_encoding"], row["name"], row["display_image"]
                 payload = {
-                  "emp_id": emp_id,
-                  "name": name,
-                  "encoding": base64.b64encode(encoding_bytes).decode() if encoding_bytes else None,
-                  "display_image": base64.b64encode(img_bytes).decode() if img_bytes else ""
+                    "type": "face_edit",
+                    "emp_id": emp_id,
+                    "name": name,
+                    "encoding": base64.b64encode(encoding_bytes).decode(),
+                    "display_image": base64.b64encode(disp_img).decode() if disp_img else ""
                 }
-                enqueue_sync_to_all_devices("face_edit", payload)
-
                 for dev in state.get("devices", []):
                     ip = dev.get("ip")
                     if ip and ip != self_ip:
@@ -1992,132 +2067,6 @@ def _pick_first_free_template_id(conn, sensor):
             pass
         return tid
     return None
-
-# --- Device-side reassembly & generic handler (useful for devices receiving chunks) ---
-_device_reassembly = {}
-
-def device_udp_listener_main(bind_ip='0.0.0.0', port=UDP_PORT):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind((bind_ip, port))
-    s.settimeout(1.0)
-    print(f"[DEVICE-LISTENER] listening on {bind_ip}:{port}")
-    while True:
-        try:
-            data, addr = s.recvfrom(8192)
-            try:
-                hdr, payload = data.split(b'\n', 1)
-                j = json.loads(hdr.decode('utf-8', errors='ignore'))
-            except Exception:
-                continue
-            mid = j.get("message_id"); idx = int(j.get("chunk_index",0)); total = int(j.get("total_chunks",1))
-            if mid not in _device_reassembly:
-                _device_reassembly[mid] = {"chunks": {}, "total": total, "first_ts": time.time(), "addr": addr}
-            _device_reassembly[mid]["chunks"][idx] = payload
-            if len(_device_reassembly[mid]["chunks"]) == _device_reassembly[mid]["total"]:
-                parts = [ _device_reassembly[mid]["chunks"][i] for i in range(_device_reassembly[mid]["total"]) ]
-                env_bytes = b''.join(parts)
-                try:
-                    envelope = json.loads(env_bytes.decode('utf-8'))
-                    handle_incoming_envelope(envelope)
-                    ack = json.dumps({"type":"ack","message_id":mid}).encode('utf-8')
-                    s.sendto(ack, addr)
-                except Exception as e:
-                    print("[DEVICE] reassembly error:", e)
-                del _device_reassembly[mid]
-        except socket.timeout:
-            # cleanup stale
-            now = time.time()
-            stale = [k for k,v in _device_reassembly.items() if now - v["first_ts"] > 30]
-            for k in stale: del _device_reassembly[k]
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print("[DEVICE-LISTENER] error:", e)
-            time.sleep(0.1)
-
-def handle_incoming_envelope(envelope: dict):
-    """
-    Minimal handler — expands to apply payload to local DB/sensor.
-    Recognized envelope types: user_upsert, user_delete, face_register, face_edit, finger_register, finger_edit.
-    """
-    t = envelope.get("type")
-    payload = envelope.get("payload") or {}
-    # face sync
-    if t in ("face_register", "face_edit"):
-        emp_id = payload.get("emp_id"); name = payload.get("name")
-        enc_b64 = payload.get("encoding"); img_b64 = payload.get("display_image")
-        try:
-            enc = base64.b64decode(enc_b64) if enc_b64 else None
-            img = base64.b64decode(img_b64) if img_b64 else None
-            conn = get_db_connection()
-            try:
-                conn.execute("INSERT OR IGNORE INTO users (emp_id, name) VALUES (?, ?)", (emp_id, name))
-                if enc is not None:
-                    conn.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", (sqlite3.Binary(enc), emp_id))
-                if img is not None:
-                    conn.execute("UPDATE users SET display_image=? WHERE emp_id=?", (sqlite3.Binary(img), emp_id))
-                conn.commit()
-            finally:
-                conn.close()
-            print(f"[DEVICE] stored face for {emp_id}")
-        except Exception as e:
-            print("[DEVICE] face store error:", e)
-    elif t in ("finger_register", "finger_edit"):
-        tpl_b64 = payload.get("template"); user_id = payload.get("user_id") or payload.get("template_id") or payload.get("emp_id")
-        try:
-            tpl = base64.b64decode(tpl_b64) if tpl_b64 else None
-            if tpl:
-                conn = get_db_connection()
-                try:
-                    tid = None
-                    try: tid = int(user_id)
-                    except Exception: tid = get_template_id_if_any(user_id) or _first_free_template_id(conn)
-                    conn.execute("INSERT OR REPLACE INTO fingerprints (id, username, template) VALUES (?, ?, ?)", (tid, payload.get("username") or payload.get("emp_id") or "", sqlite3.Binary(tpl)))
-                    if payload.get("emp_id"):
-                        conn.execute("INSERT OR REPLACE INTO user_finger_map (emp_id, template_id) VALUES (?, ?)", (payload.get("emp_id"), tid))
-                    conn.commit()
-                finally:
-                    conn.close()
-                # optionally write to hardware sensor if you have finger API available
-                try:
-                    if Fingerprint is not None:
-                        fp = Fingerprint()
-                        if hasattr(fp, "write_template_to_sensor"):
-                            fp.write_template_to_sensor(tid, tpl)
-                except Exception as e:
-                    print("[DEVICE] write-to-sensor failed:", e)
-                print(f"[DEVICE] stored fingerprint tid={tid}")
-        except Exception as e:
-            print("[DEVICE] finger store error:", e)
-    elif t == "user_delete":
-        emp = payload.get("emp_id")
-        try:
-            conn = get_db_connection()
-            try:
-                conn.execute("DELETE FROM users WHERE emp_id=?", (emp,))
-                conn.execute("DELETE FROM user_finger_map WHERE emp_id=?", (emp,))
-                conn.commit()
-            finally:
-                conn.close()
-            print(f"[DEVICE] deleted user {emp}")
-        except Exception as e:
-            print("[DEVICE] delete error:", e)
-    elif t == "user_upsert":
-        emp = payload.get("emp_id"); name = payload.get("name"); role = payload.get("role")
-        try:
-            conn = get_db_connection()
-            try:
-                conn.execute("INSERT OR IGNORE INTO users (emp_id, name, role) VALUES (?, ?, ?)", (emp, name, role))
-                if name: conn.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp))
-                if role: conn.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp))
-                conn.commit()
-            finally:
-                conn.close()
-            print(f"[DEVICE] user upsert {emp}")
-        except Exception as e:
-            print("[DEVICE] user_upsert failed:", e)
-
-
 
 @app.route("/api/finger_register", methods=["POST"])
 def api_finger_register():
@@ -2784,8 +2733,6 @@ def delete_user():
     c.execute("DELETE FROM users WHERE emp_id=?", (emp_id,))
     c.execute("DELETE FROM user_finger_map WHERE emp_id=?", (emp_id,))
     conn.commit()
-    enqueue_sync_to_all_devices("user_delete", {"emp_id": emp_id})
-
     conn.close()
 
     if mapped is not None:
@@ -3774,273 +3721,6 @@ def api_shutdown():
         return {"success": True, "message": "Shutting down..."}
     except Exception as e:
         return {"success": False, "message": str(e)}, 500
-# --- Discovery dashboard routes & APIs ---
-from flask import render_template, request, jsonify
-
-# ----- discovery helpers -----
-import threading
-import socket
-import json
-import time
-import uuid
-
-# STOP event for background threads (create once at top-level if not present)
-try:
-    STOP_EVENT
-except NameError:
-    from threading import Event
-    STOP_EVENT = Event()
-
-# Use same UDP_PORT you already have; ensure UDP_PORT variable exists
-# UDP_PORT = 5006  # if not defined, set it earlier in your file
-
-def _get_primary_ip():
-    """Return an IPv4 address for the primary interface (works without extra deps)."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # connect to public DNS to find outbound IP (no packets actually sent)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return None
-
-def discovery_broadcast_once(bcast_ip="255.255.255.255", port=UDP_PORT, timeout=0.25):
-    """
-    Broadcast a 'discover' packet using source port == port so replies return to our listener.
-    Sends to 255.255.255.255 and to interface-specific broadcast (xxx.xxx.xxx.255).
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    except Exception:
-        pass
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-    # try to bind sender to discovery port so replies return to listener
-    try:
-        s.bind(("0.0.0.0", int(port)))
-    except Exception as e:
-        # log but continue (some systems may not allow bind if listener didn't set reuse options)
-        print("[DISCOVERY] warning: sender bind to port failed:", e)
-
-    payload = {
-        "type": "discover",
-        "device_id": get_setting("device_id", f"CANT_{uuid.uuid4().hex[:6]}"),
-        "name": get_setting("device_name", "Ethos Device"),
-        "port": int(port),
-        "ts": _now_iso() if "_now_iso" in globals() else ""
-    }
-    pkt = json.dumps(payload).encode("utf-8")
-
-    # send to global broadcast
-    try:
-        s.sendto(pkt, (bcast_ip, int(port)))
-    except Exception as e:
-        print("[DISCOVERY] broadcast send error to", bcast_ip, e)
-
-    # also send to interface broadcast (xxx.xxx.xxx.255) if we can compute it
-    local_ip = _get_primary_ip()
-    if local_ip:
-        try:
-            parts = local_ip.split(".")
-            if len(parts) == 4:
-                brd = ".".join(parts[:3] + ["255"])
-                try:
-                    s.sendto(pkt, (brd, int(port)))
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # small pause to give devices time to reply
-    time.sleep(timeout)
-    try:
-        s.close()
-    except:
-        pass
-
-# Run broadcast in background thread (non-blocking)
-def discovery_broadcast_bg(port=UDP_PORT):
-    threading.Thread(target=lambda: discovery_broadcast_once(port=port), daemon=True).start()
-
-
-@app.route("/discovery")
-def discovery_page():
-    """
-    Render discovery dashboard page.
-    Template references BRAND_LOGO injected by your existing inject_brand() context processor.
-    """
-    return render_template("discovery.html")
-
-
-# ----- API endpoints (add or replace existing handlers) -----
-from flask import request
-
-@app.route("/api/discovery/scan", methods=["POST"])
-def api_discovery_scan():
-    """
-    Trigger a network discovery scan. Returns immediately and triggers background broadcast.
-    """
-    try:
-        discovery_broadcast_bg()
-        return jsonify({"success": True, "message": "Scan started"})
-    except Exception as e:
-        app.logger.exception("api_discovery_scan")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-@app.route("/api/discovery/connect", methods=["POST"])
-def api_discovery_connect():
-    """
-    Simple connect placeholder: attempts a basic TCP connect to device on the provided IP and known port.
-    You can customize this to open a device UI URL or perform a handshake.
-    """
-    data = (request.get_json(force=True) or {})
-    ip = (data.get("ip") or "").strip()
-    if not ip:
-        return jsonify({"success": False, "message": "Missing ip"}), 400
-
-    # read port from DB if present, else use UDP_PORT default
-    try:
-        conn = get_db_connection()
-        row = conn.execute("SELECT port FROM mesh_devices WHERE ip = ?", (ip,)).fetchone()
-        conn.close()
-        port = int(row["port"]) if row and row["port"] else UDP_PORT
-    except Exception:
-        port = UDP_PORT
-
-    # Attempt a simple TCP handshake (non-blocking with timeout).
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1.0)
-        s.connect((ip, port))   # if device accepts TCP on that port
-        s.close()
-        return jsonify({"success": True, "message": f"Connected to {ip}:{port}"})
-    except Exception as e:
-        # If TCP connect fails, return success anyway but note failure (many devices only speak UDP)
-        return jsonify({"success": False, "message": f"Could not connect to {ip}:{port} ({e})"}), 502
-
-
-# ----- ensure discovery listener starts at app startup (if not already started) -----
-def ensure_discovery_listener_started():
-    """
-    Call this once during app startup so listener runs in background.
-    """
-    try:
-        # check if already running: look for a global flag
-        if not globals().get("_DISCOVERY_LISTENER_STARTED"):
-            t = threading.Thread(target=lambda: discovery_listener(STOP_EVENT, bind_ip="0.0.0.0", port=UDP_PORT), daemon=True)
-            t.start()
-            globals()["_DISCOVERY_LISTENER_STARTED"] = True
-            print("[DISCOVERY] listener thread started on port", UDP_PORT)
-    except Exception as e:
-        print("[DISCOVERY] could not start listener:", e)
-
-# Call ensure_discovery_listener_started() at the end of your app startup sequence (after get_db_connection available).
-# For example, place this near the bottom of the file where you start other background tasks:
-try:
-    ensure_discovery_listener_started()
-except Exception:
-    pass
-
-
-@app.route("/api/discovery/list", methods=["GET"])
-def api_discovery_list():
-    """
-    Schema-aware discovery list. Reads ip/device_id/name/port and optional last_seen.
-    """
-    try:
-        conn = get_db_connection()
-        cols = [r["name"] for r in conn.execute("PRAGMA table_info(mesh_devices)").fetchall()]
-        select_cols = ["ip AS ip", "device_id AS device_id", "name AS name", "port AS port"]
-        if "last_seen" in cols:
-            select_cols.append("last_seen AS last_seen")
-            order = "ORDER BY last_seen DESC"
-        else:
-            select_cols.append("'' AS last_seen")
-            order = ""
-
-        q = "SELECT " + ", ".join(select_cols) + " FROM mesh_devices " + order
-        rows = conn.execute(q).fetchall()
-
-        devices = []
-        for r in rows:
-            devices.append({
-                "ip": r["ip"],
-                "device_id": r["device_id"] or "",
-                "name": r["name"] or "",
-                "port": int(r["port"] or 5006),
-                "last_seen": r["last_seen"] or ""
-            })
-        conn.close()
-        return jsonify({"success": True, "devices": devices})
-    except Exception as e:
-        app.logger.exception("api_discovery_list")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route("/api/discovery/pair", methods=["POST"])
-def api_discovery_pair():
-    """
-    Mark a device as 'paired' by storing it in app_settings (simple approach).
-    You can expand this to keep a separate pairing table.
-    """
-    data = request.get_json(force=True) or {}
-    ip = (data.get("ip") or "").strip()
-    if not ip:
-        return jsonify({"success": False, "message": "ip required"}), 400
-    try:
-        # store the paired target ip (simple single-target pairing)
-        set_setting("paired_target_ip", ip)
-        return jsonify({"success": True, "paired_ip": ip})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
-@app.route("/api/discovery/sync", methods=["POST"])
-def api_discovery_sync():
-    """
-    Enqueue a small 'request_sync' message to the selected device IP.
-    This uses your reliable enqueue helper (so worker will attempt delivery).
-    """
-    data = request.get_json(force=True) or {}
-    ip = (data.get("ip") or "").strip()
-    port = int((data.get("port") or UDP_PORT) or UDP_PORT)
-    if not ip:
-        return jsonify({"success": False, "message": "ip required"}), 400
-    try:
-        # prepare a minimal sync payload — you can expand to include actual user data.
-        payload = {
-            "type": "request_sync_users",
-            "from": get_self_ip(),
-            "requested_at": _now_iso()
-        }
-        # enqueue reliable send to single device
-        reliable_udp_send_to(ip, port, payload, message_type="request_sync")
-        return jsonify({"success": True, "message": "sync enqueued", "ip": ip})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-
-
-@app.route("/api/discovery/remove", methods=["POST"])
-def api_discovery_remove():
-    """
-    Remove a discovered device from mesh_devices table.
-    """
-    data = request.get_json(force=True) or {}
-    ip = (data.get("ip") or "").strip()
-    if not ip:
-        return jsonify({"success": False, "message": "ip required"}), 400
-    try:
-        conn = get_db_connection()
-        conn.execute("DELETE FROM mesh_devices WHERE ip=?", (ip,))
-        conn.commit()
-        conn.close()
-        return jsonify({"success": True, "removed": ip})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
 
 # -----------------------------------------------------------------------------
 # Main entry
@@ -4053,19 +3733,5 @@ if __name__ == '__main__':
 
     # Persist TTL setting (optional)
     set_setting("handoff_ttl_seconds", str(HANDOFF_TTL_SECONDS))
-    
-    
-# near bottom of app.py, after DB/schema init and before app.run(...)
-    from threading import Event
-
-    _stop_evt = Event()
-
-    # run_parallel() helper already exists in your file (starts daemon threads).
-    # Start the UDP discovery listener so this device will reply and record devices:
-    run_parallel(
-    lambda: discovery_listener(_stop_evt, bind_ip="0.0.0.0", port=UDP_PORT),
-)
-
-
     # App runs even if Postgres is down; events queue and sync later.
     app.run(host='0.0.0.0', port=app.config.get("APP_PORT", 5000), debug=False)
