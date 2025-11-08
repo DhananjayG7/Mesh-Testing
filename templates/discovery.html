@@ -20,13 +20,13 @@
       gap:12px;
     }
     .left-actions{ display:flex; align-items:center; gap:12px; min-width:160px; }
-    .back-btn{
+    .menu-back-btn{
       display:inline-flex; align-items:center; gap:8px;
       background:transparent; border:1px solid rgba(32,80,129,0.08);
       color:#205081; padding:8px 12px; border-radius:10px; cursor:pointer; font-weight:700;
       box-shadow:0 1px 0 rgba(0,0,0,0.02);
     }
-    .back-btn:active{ transform:translateY(1px); }
+    .menu-back-btn:active{ transform:translateY(1px); }
     .logo-main{ height:44px; }
     .brand-name{ font-weight:800; color:#205081; font-size:1.05rem; margin-left:6px; letter-spacing:0.2px; }
     .logo-right{ height:34px; }
@@ -39,9 +39,10 @@
     .btn{ background:#205081; color:#fff; padding:8px 12px; border-radius:8px; border:none; cursor:pointer; font-weight:600; }
     .btn.secondary{ background:transparent; color:#205081; border:1px solid #e6eef8; }
     .btn.warn{ background:#FF7A3D; color:#fff; }
+    .btn.ghost{ background:transparent; color:#205081; border:1px dashed rgba(32,80,129,0.12); }
 
     table{ width:100%; border-collapse:collapse; margin-top:8px; }
-    th, td{ text-align:left; padding:12px 10px; border-bottom:1px solid #f0f3f7; font-size:13px; }
+    th, td{ text-align:left; padding:12px 10px; border-bottom:1px solid #f0f3f7; font-size:13px; vertical-align:middle; }
     th{ color:#53637a; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.6px; }
 
     .status-dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; }
@@ -52,33 +53,43 @@
     .custom-scroll{ position:fixed; right:var(--sb-inset-right); width:var(--sb-width); top:84px; height:calc(100vh - 84px); z-index:9999; display:none; background:rgba(0,0,0,0.06); border-radius:var(--sb-radius); box-sizing:border-box; }
     .custom-thumb{ position:absolute; left:2px; right:2px; top:0; height:80px; background:#bfbfbf; border-radius:calc(var(--sb-radius) - 2px); box-shadow:0 1px 2px rgba(0,0,0,0.25); cursor:grab; touch-action:none; }
 
+    /* tiny toast status */
+    #statusToast{
+      position:fixed; right:20px; top:96px; z-index:99999; background:rgba(0,0,0,0.75); color:#fff; padding:8px 12px; border-radius:8px; display:none; font-weight:600;
+    }
+
     @media (max-width:720px){
       .brand-name{ display:none; } /* save space on small screens */
+      .controls{ gap:8px; }
     }
   </style>
 </head>
 <body>
-  <div class="header">
+  <div class="header" id="pageHeader">
     <div class="left">
       <button class="menu-back-btn" onclick="window.location.href='/menu'"><i class="fa fa-arrow-left"></i> Menu</button>
     </div>
+
     <div style="flex:1; display:flex; align-items:center; justify-content:center;">
       <img src="/static/img/logo_company.png" class="logo-main" alt="Ethos Logo">
+      <div class="brand-name" style="margin-left:14px;">Ethos device</div>
     </div>
-    <div class="right">
+
+    <div class="right" style="display:flex; align-items:center; gap:10px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <label style="font-size:12px;color:#53637a;margin-right:6px;">Auto refresh</label>
+        <button id="btnAutoRefresh" class="btn ghost" title="Toggle auto refresh">Off</button>
+      </div>
       <img src="/static/img/logo_epitage.png" class="logo-right" alt="Epitage">
     </div>
   </div>
-        <!-- brand name text -->
-        <div class="brand-name">Ethos device</div>
-      
 
   <div class="scroll-area" id="scrollArea" aria-label="Discovery content">
     <div class="card">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
         <div>
           <h2 style="margin:6px 0 2px 0; color:#205081;">Device Discovery & Dashboard</h2>
-          <div class="muted">Scan your network for devices, pair a target, push user syncs, or remove entries.</div>
+          <div class="muted">Scan your network for devices, pair a target, push user syncs, connect to a device, or remove entries.</div>
         </div>
         <div class="controls" style="margin-left:auto;">
           <button id="btnScan" class="btn">Scan Network</button>
@@ -94,7 +105,7 @@
             <th>Device Name</th>
             <th>Port</th>
             <th>Status</th>
-            <th style="width:220px">Actions</th>
+            <th style="width:260px">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -105,23 +116,49 @@
     </div>
   </div>
 
+  <div id="statusToast" role="status" aria-live="polite"></div>
+
   <div class="custom-scroll" id="customScroll" aria-hidden="true">
     <div class="custom-thumb" id="customThumb"></div>
   </div>
 
   <script>
-    // Back button behaviour
-    document.getElementById('backButton').addEventListener('click', function(){
-      // prefer history back, fallback to menu
-      if(window.history.length > 1) window.history.back();
-      else window.location.href = '/';
-    });
+    // small helper for toast messages
+    function toast(msg, ms=2200){
+      const t = document.getElementById('statusToast');
+      t.textContent = msg;
+      t.style.display = "block";
+      clearTimeout(t._to);
+      t._to = setTimeout(()=> t.style.display = "none", ms);
+    }
 
     const $ = s=>document.querySelector(s);
     const api = async (path, opts)=> {
       const r = await fetch(path, opts);
       try { return await r.json(); } catch(e){ return null; }
     };
+
+    let autoRefresh = false;
+    let autoRefreshTimer = null;
+
+    function setAutoRefresh(on){
+      autoRefresh = !!on;
+      const btn = document.getElementById('btnAutoRefresh');
+      btn.textContent = autoRefresh ? 'On' : 'Off';
+      if(autoRefresh){
+        autoRefreshTimer = setInterval(loadDevices, 5000);
+        btn.classList.remove('ghost'); btn.classList.add('btn');
+      } else {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+        btn.classList.remove('btn'); btn.classList.add('ghost');
+      }
+    }
+
+    document.getElementById('btnAutoRefresh').addEventListener('click', ()=>{
+      setAutoRefresh(!autoRefresh);
+      toast('Auto refresh ' + (autoRefresh ? 'enabled' : 'disabled'));
+    });
 
     function renderDevices(rows){
       const tbody = document.querySelector("#devicesTable tbody");
@@ -136,8 +173,11 @@
         const devId = d.device_id || "";
         const name = d.name || "";
         const port = d.port || 5006;
-        const isOnline = !!d.last_seen || d.status === "online";
+        // last_seen field may be empty string; interpret presence as online
+        const isOnline = (d.last_seen && d.last_seen.length>0) || !!d.status || true; // assume reachable if present
         const statusHtml = `<span class="status-dot ${isOnline ? "online":"offline"}"></span><span class="muted">${isOnline ? (d.last_seen || "online") : "offline"}</span>`;
+
+        // actions: Connect, Pair, Sync, Remove
         tr.innerHTML = `
           <td><strong>${ip}</strong></td>
           <td>${devId}</td>
@@ -145,6 +185,7 @@
           <td>${port}</td>
           <td>${statusHtml}</td>
           <td style="white-space:nowrap;">
+            <button class="btn" onclick="connectDevice('${ip}')" title="Open connection to device"><i class="fa-solid fa-plug"></i> Connect</button>
             <button class="btn" onclick="pairDevice('${ip}')">Pair</button>
             <button class="btn secondary" onclick="syncDevice('${ip}')">Sync</button>
             <button class="btn warn" onclick="removeDevice('${ip}')">Remove</button>
@@ -155,44 +196,77 @@
     }
 
     async function loadDevices(){
+      const refreshBtn = document.getElementById('btnRefresh');
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = "Loading…";
       const res = await api("/api/discovery/list");
       if(res && res.success){ renderDevices(res.devices); } else { renderDevices([]); }
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "Refresh";
     }
 
     async function scanNetwork(){
-      $("#btnScan").disabled = true;
-      $("#btnScan").textContent = "Scanning…";
-      await api("/api/discovery/scan", { method: "POST" });
+      const btn = document.getElementById('btnScan');
+      btn.disabled = true;
+      btn.textContent = "Scanning…";
+      // use POST to instruct server to broadcast (server will reply to its own listener too)
+      const res = await api("/api/discovery/scan", { method: "POST" });
       const now = new Date().toLocaleString();
-      $("#lastScan").textContent = "Last scan: " + now;
-      $("#btnScan").disabled = false;
-      $("#btnScan").textContent = "Scan Network";
+      document.getElementById("lastScan").textContent = "Last scan: " + now;
+      btn.disabled = false;
+      btn.textContent = "Scan Network";
+      // small delay before loading devices so listener has time to insert rows
       setTimeout(loadDevices, 1400);
+      if(res && res.success) toast('Scan started');
+      else toast('Scan failed');
+    }
+
+    async function connectDevice(ip){
+      if(!confirm("Connect to " + ip + " ?")) return;
+      const btnPlaceholder = document.createElement('span');
+      try{
+        const res = await api("/api/discovery/connect", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
+        if(res && res.success){
+          toast("Connected to " + ip);
+          // optional: redirect to a device page if server returns URL
+          if(res.url) window.location.href = res.url;
+        } else {
+          toast("Connect failed: " + (res && res.message ? res.message : 'unknown'));
+        }
+      }catch(e){
+        toast("Connect error");
+      }
+      loadDevices();
     }
 
     async function pairDevice(ip){
       if(!confirm("Pair with " + ip + "?")) return;
       const res = await api("/api/discovery/pair", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) alert("Paired " + ip);
+      if(res && res.success) toast("Paired " + ip);
+      else toast("Pair failed");
       loadDevices();
     }
 
     async function syncDevice(ip){
       if(!confirm("Push users to " + ip + " now?")) return;
       const res = await api("/api/discovery/sync", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) alert("Sync enqueued to " + ip);
+      if(res && res.success) toast("Sync enqueued to " + ip);
+      else toast("Sync failed");
       loadDevices();
     }
 
     async function removeDevice(ip){
       if(!confirm("Remove " + ip + " ?")) return;
       const res = await api("/api/discovery/remove", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ ip })});
-      if(res && res.success) alert("Removed " + ip);
+      if(res && res.success) toast("Removed " + ip);
+      else toast("Remove failed");
       loadDevices();
     }
 
     document.getElementById("btnScan").addEventListener("click", scanNetwork);
     document.getElementById("btnRefresh").addEventListener("click", loadDevices);
+
+    // start with a single load
     loadDevices();
 
     // scrollbar logic (same as menu)
