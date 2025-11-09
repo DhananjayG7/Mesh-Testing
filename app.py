@@ -508,6 +508,36 @@ def _make_listen_socket():
     s.settimeout(1.0)
     return s
 
+
+# ----------------------------
+# Mesh selection helpers
+# ----------------------------
+def get_selected_mesh_devices():
+    """Return saved mesh IP list from settings (excluding self IP)."""
+    try:
+        raw = get_setting("mesh_devices", "[]")
+    except Exception:
+        raw = "[]"
+    try:
+        ips = json.loads(raw)
+    except Exception:
+        ips = []
+    # remove ourself if present
+    self_ip = get_self_ip()
+    ips = [ip for ip in ips if ip and ip != self_ip]
+    return ips
+
+def set_selected_mesh_devices(ip_list):
+    """Persist a list of IPs (strings)."""
+    try:
+        # ensure we don't save self ip
+        self_ip = get_self_ip()
+        filtered = [ip for ip in (ip_list or []) if ip and ip != self_ip]
+        set_setting("mesh_devices", json.dumps(filtered))
+    except Exception as e:
+        print("[mesh] save error:", e)
+
+
 def _insert_queue_item(msg_id, target_ip, payload_json):
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -729,15 +759,25 @@ def load_mesh_state():
 def send_udp_json(target_ip, port, payload):
     """
     Backwards-compatible send helper: enqueue payload to single target_ip (or broadcast if target_ip is falsy).
-    Returns True if enqueued.
+    Now prefers saved mesh devices if any are configured.
+    - target_ip, port are accepted for compatibility but ignored when mesh is configured (we use saved list).
     """
     try:
-        if not target_ip:
-            send_reliable(payload, targets=None)
-        else:
-            send_reliable(payload, targets=[target_ip])
+        # If a caller explicitly passed a target_ip (not None/""), respect it.
+        if target_ip:
+            # single-target reliable send
+            return send_reliable(payload, targets=[target_ip]) is not None
+        # else no explicit target -> check saved mesh
+        saved = get_selected_mesh_devices()
+        if saved:
+            # send to each saved device
+            send_reliable(payload, targets=saved)
+            return True
+        # fallback to broadcast
+        send_reliable(payload, targets=None)
         return True
-    except Exception:
+    except Exception as e:
+        print("[send_udp_json] error:", e)
         return False
 
 def broadcast_login_udp(emp_id, name, medium):
@@ -776,10 +816,38 @@ def api_save_mesh_devices():
     data = request.get_json(force=True) or {}
     ips = data.get("devices") or []
     try:
-        set_setting("mesh_devices", json.dumps(ips))
-    except Exception:
-        pass
-    return jsonify({"success": True})
+        # remove empties and ourself
+        self_ip = get_self_ip()
+        cleaned = [ip for ip in ips if ip and ip != self_ip]
+        # persist
+        set_selected_mesh_devices(cleaned)
+        # notify peers of mesh update (so they can optionally save/ack or at least mark online)
+        if cleaned:
+            try:
+                payload = {
+                    "type": "mesh_update",
+                    "from": self_ip,
+                    "members": cleaned,
+                    "ts": time.time()
+                }
+                # use send_reliable targets=cleaned so each selected peer receives the update
+                send_reliable(payload, targets=cleaned)
+            except Exception as e:
+                print("[mesh] notify error:", e)
+        # return saved + current discovered device info
+        return jsonify({"success": True, "saved": cleaned})
+    except Exception as e:
+        print("[mesh] save endpoint error:", e)
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route("/api/saved_mesh", methods=["GET"])
+def api_saved_mesh():
+    try:
+        ips = get_selected_mesh_devices()
+        return jsonify({"success": True, "saved": ips})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
 
 # -----------------------------------------------------------------------------
 # Template-ID API (auto-incremental & reserved per emp_id)
@@ -1365,8 +1433,11 @@ def index():
 
 @app.route("/discover")
 def discover_page():
-    return render_template("discovery.html")
+    return render_template("discover.html")
 
+@app.route("/api/my_ip")
+def api_my_ip():
+    return jsonify({"ip": get_self_ip()})
 
 
 @app.route('/menu')
