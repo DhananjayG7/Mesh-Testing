@@ -1,296 +1,620 @@
-{% extends "base.html" %}
-{% block title %}Device Discovery & Mesh Setup{% endblock %}
-
-{% block page_css %}
-<style>
-:root{
-  --brand: #FFA500;
-  --bg: #f9f6ef;
-  --card: #ffffff;
-  --muted: #666;
-  --success: #2e7d32;
-  --danger: #c62828;
-}
-
-/* layout */
-.page-shell {
-  height: 100%;
-  overflow-y: auto;
-  padding: 18px;
-  box-sizing: border-box;
-  background: var(--bg);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-}
-
-/* controls */
-.btn {
-  padding:8px 12px;
-  border-radius:8px;
-  font-weight:600;
-  cursor:pointer;
-  border:none;
-  background:#fff;
-  box-shadow: 0 6px 18px rgba(32,80,129,0.06);
-}
-.btn-primary { background: var(--brand); color:#fff; }
-.btn-ghost { background:transparent; color:var(--brand); border:1px solid rgba(0,0,0,0.06); }
-
-.devices {
-  display:grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap:12px;
-}
-.device {
-  background:var(--card);
-  border-radius:10px;
-  padding:12px;
-  box-shadow: 0 6px 18px rgba(32,80,129,0.06);
-}
-.device .row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.meta { color:var(--muted); font-size:0.92rem; }
-.ip { font-weight:700; }
-
-.badge { padding:6px 8px; border-radius:8px; font-weight:700; }
-.badge.online { background:#e6f7ea; color:var(--success); }
-.badge.offline { background:#fff0f0; color:var(--danger); }
-
-.page-footer { margin-top:14px; color:var(--muted); font-size:0.9rem; }
-#activityLog { max-height:160px; overflow:auto; background:#fff; border-radius:6px; padding:8px; margin-top:8px; }
-</style>
-{% endblock %}
-
-{% block body %}
-<div class="page-shell">
-  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px;">
-    <div style="display:flex; gap:12px; align-items:center;">
-      <button onclick="history.back()" class="btn btn-ghost">← Menu</button>
-      <div>
-        <div style="font-weight:800; font-size:1.05rem;">Device Discovery & Mesh</div>
-        <div style="color:#555; font-size:0.92rem;">Select devices to include in your mesh network. Self IP is excluded automatically.</div>
-      </div>
-    </div>
-
-    <div style="display:flex; gap:8px; align-items:center;">
-      <button id="btnScan" class="btn">Scan</button>
-      <button id="btnSave" class="btn btn-primary">Save Network</button>
-      <label style="display:flex; align-items:center; gap:6px; font-weight:600;">
-        <input id="autoRefresh" type="checkbox" checked /> Auto
-      </label>
-    </div>
-  </div>
-
-  <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
-    <input id="filterIp" placeholder="Filter by IP or name..." style="flex:1; padding:8px; border-radius:8px; border:1px solid #eee; background:#fff;" />
-    <div style="display:flex; gap:8px;">
-      <button id="btnSelectAll" class="btn">Select All</button>
-      <button id="btnClear" class="btn">Clear</button>
-    </div>
-  </div>
-
-  <div style="display:flex; gap:12px; margin-bottom:12px;">
-    <div style="padding:10px 12px; background:#fff; border-radius:8px;">
-      <div id="savedCount" style="font-weight:800;">Saved: 0</div>
-      <div style="color:var(--muted);">Selected devices in saved mesh</div>
-    </div>
-    <div style="padding:10px 12px; background:#fff; border-radius:8px;">
-      <div id="knownCount" style="font-weight:800;">Known: 0</div>
-      <div style="color:var(--muted);">Devices discovered</div>
-    </div>
-    <div style="padding:10px 12px; background:#fff; border-radius:8px;">
-      <div id="selfIp" style="font-weight:800;">You: --</div>
-      <div style="color:var(--muted);">Local device IP</div>
-    </div>
-  </div>
-
-  <div class="devices" id="deviceList"></div>
-
-  <div class="page-footer">
-    <div>
-      <b>How it works:</b>
-      <ul>
-        <li>Select devices and press <i>Save Network</i>. Your device will notify each selected peer.</li>
-        <li>Saved devices will receive register/login/delete events reliably via UDP queue.</li>
-      </ul>
-    </div>
-
-    <div style="margin-top:10px;">
-      <b>Activity:</b>
-      <div id="activityLog"></div>
-    </div>
-  </div>
-</div>
-
-<script>
-/* Discover page JS: uses endpoints:
-   - GET /api/discover_now
-   - GET /api/devices
-   - GET /api/saved_mesh
-   - POST /api/save_mesh_devices
-   - GET /api/my_ip (optional)
-*/
-
-(function () {
-  const deviceListEl = document.getElementById('deviceList');
-  const savedCount = document.getElementById('savedCount');
-  const knownCount = document.getElementById('knownCount');
-  const activityLog = document.getElementById('activityLog');
-  const selfIpEl = document.getElementById('selfIp');
-  const filterInput = document.getElementById('filterIp');
-
-  let discovered = [], saved = [], selfIp = null, autoTimer = null;
-
-  function logActivity(msg) {
-    const el = document.createElement('div');
-    el.style.padding = '6px';
-    el.style.borderBottom = '1px solid #f0f0f0';
-    el.textContent = `${new Date().toLocaleTimeString()} — ${msg}`;
-    activityLog.prepend(el);
-    if (activityLog.children.length > 200) activityLog.removeChild(activityLog.lastChild);
-  }
-
-  async function fetchSelfIp() {
-    try {
-      const r = await fetch('/api/my_ip');
-      if (!r.ok) return;
-      const j = await r.json();
-      selfIp = j.ip;
-      selfIpEl.textContent = 'You: ' + selfIp;
-    } catch (e) {
-      selfIpEl.textContent = 'You: (unknown)';
-    }
-  }
-
-  async function scanOnce(showLog=true) {
-    try {
-      if (showLog) logActivity('Scanning network...');
-      await fetch('/api/discover_now');
-      await new Promise(r => setTimeout(r, 600));
-      const devRes = await fetch('/api/devices');
-      const devJson = await devRes.json();
-      discovered = devJson.devices || [];
-      const savedRes = await fetch('/api/saved_mesh');
-      const savedJson = await savedRes.json();
-      saved = savedJson.saved || [];
-      renderList();
-      if (showLog) logActivity(`Scan complete — devices: ${discovered.length}, saved: ${saved.length}`);
-    } catch (e) {
-      logActivity('Scan failed: ' + (e.message || e));
-    }
-  }
-
-  function formatLastSeen(ts) {
-    const s = (Date.now()/1000) - ts;
-    if (s < 2) return 'just now';
-    if (s < 60) return Math.round(s) + 's ago';
-    if (s < 3600) return Math.round(s/60) + 'm ago';
-    return Math.round(s/3600) + 'h ago';
-  }
-
-  function renderList() {
-    deviceListEl.innerHTML = '';
-    const q = (filterInput.value || '').trim().toLowerCase();
-    knownCount.textContent = 'Known: ' + discovered.length;
-    savedCount.textContent = 'Saved: ' + saved.length;
-
-    discovered.sort((a,b) => b.last_seen - a.last_seen);
-
-    discovered.forEach(d => {
-      const ip = d.ip;
-      if (q && !(ip.includes(q) || (d.info && JSON.stringify(d.info).toLowerCase().includes(q)))) return;
-      const last = (Date.now()/1000) - d.last_seen;
-      const isOnline = last < 8;
-      const inSaved = saved.indexOf(ip) !== -1;
-      const disabled = (selfIp && ip === selfIp);
-
-      const node = document.createElement('div');
-      node.className = 'device';
-      node.innerHTML = `
-        <div class="row">
-          <div style="display:flex; gap:10px; align-items:center;">
-            <input type="checkbox" value="${ip}" ${inSaved ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
-            <div>
-              <div class="ip">${ip} ${disabled ? '<small style="color:#999">(this device)</small>' : ''}</div>
-              <div class="meta">${d.info ? JSON.stringify(d.info) : ''}</div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Discovery - {{ BRAND_NAME }}</title>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+        }
+        
+        .info-box strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .info-box span {
+            color: #495057;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            flex: 1;
+            min-width: 150px;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-success {
+            background: #51cf66;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #40c057;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(81, 207, 102, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #adb5bd;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #868e96;
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .devices-section {
+            margin-top: 25px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #495057;
+        }
+        
+        .device-list {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .device-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .device-list::-webkit-scrollbar-track {
+            background: #f1f3f5;
+        }
+        
+        .device-list::-webkit-scrollbar-thumb {
+            background: #adb5bd;
+            border-radius: 4px;
+        }
+        
+        .device-list::-webkit-scrollbar-thumb:hover {
+            background: #868e96;
+        }
+        
+        .device-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            transition: background 0.2s;
+        }
+        
+        .device-item:last-child {
+            border-bottom: none;
+        }
+        
+        .device-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .device-checkbox {
+            width: 20px;
+            height: 20px;
+            margin-right: 15px;
+            cursor: pointer;
+            accent-color: #667eea;
+        }
+        
+        .device-info {
+            flex: 1;
+        }
+        
+        .device-ip {
+            font-weight: 600;
+            font-size: 16px;
+            color: #212529;
+            margin-bottom: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .device-details {
+            font-size: 13px;
+            color: #6c757d;
+        }
+        
+        .device-status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-online {
+            background: #d3f9d8;
+            color: #2b8a3e;
+        }
+        
+        .status-saved {
+            background: #d0ebff;
+            color: #1864ab;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #868e96;
+        }
+        
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+        
+        .empty-state p {
+            font-size: 15px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px 20px;
+            color: #868e96;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .stat-number {
+            font-size: 36px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+            line-height: 1;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #6c757d;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        
+        .alert {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+            animation: slideIn 0.3s ease;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .alert-success {
+            background: #d3f9d8;
+            color: #2b8a3e;
+            border-left: 4px solid #2b8a3e;
+        }
+        
+        .alert-error {
+            background: #ffe0e0;
+            color: #c92a2a;
+            border-left: 4px solid #c92a2a;
+        }
+        
+        .alert.show {
+            display: block;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                border-radius: 0;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+            
+            .header {
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 Mesh Network Discovery</h1>
+            <p>Discover and connect devices on your network</p>
+        </div>
+        
+        <div class="content">
+            <div class="info-box">
+                <strong>Your Device IP:</strong>
+                <span id="selfIp">Loading...</span>
             </div>
-          </div>
-          <div style="text-align:right;"><div class="badge ${isOnline ? 'online' : 'offline'}">${isOnline ? 'Online' : 'Offline'}</div></div>
+
+            <div id="alertBox" class="alert"></div>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalDevices">0</div>
+                    <div class="stat-label">Discovered</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="selectedDevices">0</div>
+                    <div class="stat-label">Selected</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="savedDevices">0</div>
+                    <div class="stat-label">In Network</div>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn-primary" onclick="discoverDevices()" id="discoverBtn">
+                    <span>🔍</span>
+                    <span>Discover Devices</span>
+                </button>
+                <button class="btn-success" onclick="saveSelectedDevices()" id="saveBtn">
+                    <span>💾</span>
+                    <span>Save Network</span>
+                </button>
+                <button class="btn-secondary" onclick="window.location.href='/'">
+                    <span>←</span>
+                    <span>Back</span>
+                </button>
+            </div>
+
+            <div class="devices-section">
+                <div class="section-title">Available Devices</div>
+                <div class="device-list" id="deviceList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📡</div>
+                        <p>Click "Discover Devices" to find devices on your network</p>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-          <div style="color:#666">Last: <b>${formatLastSeen(d.last_seen)}</b></div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn" data-action="info" data-ip="${ip}">Info</button>
-            <button class="btn ${inSaved ? 'btn-primary' : ''}" data-action="toggle" data-ip="${ip}" ${disabled ? 'disabled' : ''}>${inSaved ? 'Saved' : 'Add'}</button>
-          </div>
-        </div>
-      `;
-      deviceListEl.appendChild(node);
-    });
+    </div>
 
-    // attach handlers
-    document.querySelectorAll('[data-action="toggle"]').forEach(btn=>{
-      btn.onclick = ()=>{
-        const ip = btn.dataset.ip;
-        if (saved.indexOf(ip) === -1) saved.push(ip);
-        else saved = saved.filter(x=>x!==ip);
-        renderList();
-      };
-    });
-    document.querySelectorAll('[data-action="info"]').forEach(btn=>{
-      btn.onclick = ()=>{
-        const ip = btn.dataset.ip;
-        alert('Device info: ' + JSON.stringify(discovered.find(dd=>dd.ip===ip) || {}));
-      };
-    });
-  }
+    <script>
+        let discoveredDevices = [];
+        let savedDeviceIPs = [];
+        let selfIP = '';
 
-  // event bindings
-  document.getElementById('btnScan').addEventListener('click', ()=> scanOnce(true));
-  document.getElementById('btnSave').addEventListener('click', async ()=>{
-    const selected = [...document.querySelectorAll('#deviceList input[type=checkbox]:checked')].map(i=>i.value);
-    const filtered = selected.filter(ip => ip && ip !== selfIp);
-    try {
-      const res = await fetch('/api/save_mesh_devices', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({devices: filtered})
-      });
-      const j = await res.json();
-      if (j.success) {
-        saved = j.saved || filtered;
-        logActivity('Saved mesh: ' + saved.join(', '));
-        renderList();
-      } else {
-        logActivity('Save failed: ' + (j.message||'unknown'));
-        alert('Save failed: ' + (j.message||'unknown'));
-      }
-    } catch (e) {
-      logActivity('Save error: ' + (e.message || e));
-      alert('Save error: ' + (e.message || e));
-    }
-  });
+        // Initialize on page load
+        async function init() {
+            console.log('Initializing discovery page...');
+            await loadSelfIP();
+            await loadSavedDevices();
+        }
 
-  document.getElementById('btnSelectAll').addEventListener('click', ()=> {
-    document.querySelectorAll('#deviceList input[type=checkbox]:not(:disabled)').forEach(cb=>cb.checked = true);
-  });
-  document.getElementById('btnClear').addEventListener('click', ()=> {
-    document.querySelectorAll('#deviceList input[type=checkbox]').forEach(cb=>cb.checked = false);
-  });
+        // Get this device's IP
+        async function loadSelfIP() {
+            try {
+                const res = await fetch('/api/my_ip');
+                const data = await res.json();
+                selfIP = data.ip || 'Unknown';
+                document.getElementById('selfIp').textContent = selfIP;
+                console.log('Self IP:', selfIP);
+            } catch (err) {
+                console.error('Error loading self IP:', err);
+                document.getElementById('selfIp').textContent = 'Error loading IP';
+            }
+        }
 
-  filterInput.addEventListener('input', ()=> renderList());
+        // Load saved mesh devices
+        async function loadSavedDevices() {
+            try {
+                const res = await fetch('/api/saved_mesh');
+                const data = await res.json();
+                console.log('Saved mesh response:', data);
+                if (data.success) {
+                    savedDeviceIPs = data.saved || [];
+                    document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
+                    console.log('Saved devices:', savedDeviceIPs);
+                }
+            } catch (err) {
+                console.error('Error loading saved devices:', err);
+            }
+        }
 
-  const autoCheckbox = document.getElementById('autoRefresh');
-  autoCheckbox.addEventListener('change', ()=> toggleAuto(autoCheckbox.checked));
+        // Discover devices on network
+        async function discoverDevices() {
+            const discoverBtn = document.getElementById('discoverBtn');
+            discoverBtn.disabled = true;
+            showLoading();
+            
+            try {
+                console.log('Starting discovery...');
+                const res = await fetch('/api/discover_now');
+                const data = await res.json();
+                console.log('Discovery response:', data);
+                discoveredDevices = data.devices || [];
+                
+                // Filter out self IP
+                discoveredDevices = discoveredDevices.filter(d => d.ip !== selfIP);
+                
+                renderDevices();
+                showAlert(`Discovery complete! Found ${discoveredDevices.length} device(s)`, 'success');
+            } catch (err) {
+                console.error('Discovery error:', err);
+                showAlert('Discovery failed: ' + err.message, 'error');
+                renderDevices(); // Show empty state
+            } finally {
+                discoverBtn.disabled = false;
+            }
+        }
 
-  function toggleAuto(enable) {
-    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-    if (enable) autoTimer = setInterval(()=> scanOnce(false), 3000);
-  }
+        // Render discovered devices
+        function renderDevices() {
+            const listEl = document.getElementById('deviceList');
+            
+            if (discoveredDevices.length === 0) {
+                listEl.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📡</div>
+                        <p>No devices found. Make sure other devices are running and on the same network.</p>
+                    </div>
+                `;
+                updateStats();
+                return;
+            }
 
-  // init on DOM ready
-  document.addEventListener('DOMContentLoaded', async ()=>{
-    await fetchSelfIp();
-    await scanOnce(true);
-    toggleAuto(autoCheckbox.checked);
-  });
+            listEl.innerHTML = '';
+            discoveredDevices.forEach(device => {
+                const isSaved = savedDeviceIPs.includes(device.ip);
+                const timeSince = getTimeSince(device.last_seen);
+                const deviceName = device.info && device.info.device_name ? device.info.device_name : device.info && device.info.name ? device.info.name : 'Unknown Device';
+                
+                const deviceEl = document.createElement('div');
+                deviceEl.className = 'device-item';
+                deviceEl.innerHTML = `
+                    <input type="checkbox" 
+                           class="device-checkbox" 
+                           data-ip="${device.ip}"
+                           ${isSaved ? 'checked' : ''}>
+                    <div class="device-info">
+                        <div class="device-ip">${device.ip}</div>
+                        <div class="device-details">
+                            ${deviceName} • Last seen: ${timeSince}
+                        </div>
+                    </div>
+                    ${isSaved ? '<span class="device-status status-saved">In Network</span>' : 
+                               '<span class="device-status status-online">Online</span>'}
+                `;
+                listEl.appendChild(deviceEl);
+            });
 
-})();
-</script>
-{% endblock %}
+            updateStats();
+        }
+
+        // Get human-readable time since timestamp
+        function getTimeSince(timestamp) {
+            const seconds = Math.floor(Date.now() / 1000 - timestamp);
+            if (seconds < 60) return 'just now';
+            if (seconds < 3600) return Math.floor(seconds / 60) + ' min ago';
+            if (seconds < 86400) return Math.floor(seconds / 3600) + ' hr ago';
+            return Math.floor(seconds / 86400) + ' days ago';
+        }
+
+        // Save selected devices to mesh network
+        async function saveSelectedDevices() {
+            const checkboxes = document.querySelectorAll('.device-checkbox:checked');
+            const selectedIPs = Array.from(checkboxes).map(cb => cb.dataset.ip);
+
+            if (selectedIPs.length === 0) {
+                showAlert('Please select at least one device', 'error');
+                return;
+            }
+
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.disabled = true;
+
+            try {
+                console.log('Saving devices:', selectedIPs);
+                const res = await fetch('/api/save_mesh_devices', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({devices: selectedIPs})
+                });
+                const data = await res.json();
+                console.log('Save response:', data);
+                
+                if (data.success) {
+                    savedDeviceIPs = data.saved || [];
+                    showAlert(`Network saved successfully! ${savedDeviceIPs.length} device(s) in mesh network.`, 'success');
+                    updateStats();
+                    renderDevices(); // Re-render to update badges
+                } else {
+                    showAlert('Failed to save: ' + data.message, 'error');
+                }
+            } catch (err) {
+                console.error('Save error:', err);
+                showAlert('Failed to save network: ' + err.message, 'error');
+            } finally {
+                saveBtn.disabled = false;
+            }
+        }
+
+        // Update statistics display
+        function updateStats() {
+            document.getElementById('totalDevices').textContent = discoveredDevices.length;
+            const selected = document.querySelectorAll('.device-checkbox:checked').length;
+            document.getElementById('selectedDevices').textContent = selected;
+            document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
+        }
+
+        // Show loading state
+        function showLoading() {
+            const listEl = document.getElementById('deviceList');
+            listEl.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Discovering devices on the network...</p>
+                </div>
+            `;
+        }
+
+        // Show alert message
+        function showAlert(message, type) {
+            const alertBox = document.getElementById('alertBox');
+            alertBox.className = 'alert alert-' + type + ' show';
+            alertBox.textContent = message;
+            setTimeout(() => {
+                alertBox.classList.remove('show');
+            }, 5000);
+        }
+
+        // Listen for checkbox changes
+        document.addEventListener('change', (e) => {
+            if (e.target.classList.contains('device-checkbox')) {
+                updateStats();
+            }
+        });
+
+        // Initialize when page loads
+        init();
+    </script>
+</body>
+</html>
