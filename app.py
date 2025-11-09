@@ -759,13 +759,13 @@ def _apply_incoming_payload(payload: dict):
                             c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", (enc_bytes, emp_id))
                         except Exception:
                             pass
-                    if display_img_b64:
-                        try:
-                            img_bytes = base64.b64decode(display_img_b64.split(",")[-1])
-                            c.execute("UPDATE users SET display_image=? WHERE emp_id=?", (sqlite3.Binary(img_bytes), emp_id))
-                        except Exception:
-                            pass
-                    print(f"[UDP] User {t.split('_')[1]}: {emp_id}")
+                    # In _apply_incoming_payload (Line ~762)
+                        if "," in display_img_b64:
+                            display_img_b64 = display_img_b64.split(",")[-1]
+                        img_bytes = base64.b64decode(display_img_b64)
+                        c.execute("UPDATE users SET display_image=? WHERE emp_id=?", 
+                                  (sqlite3.Binary(img_bytes), emp_id))
+                        print(f"[UDP] Display image saved for {emp_id}: {len(img_bytes)} bytes")
                 conn.commit()
                 conn.close()
                 
@@ -1924,8 +1924,15 @@ def face_register():
     if name:
         c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
     c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
+    # In face_register (Line ~1927)
     c.execute("UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
-              (encoding_bytes, img_bytes, emp_id))
+            (sqlite3.Binary(encoding_bytes), sqlite3.Binary(img_bytes), emp_id))
+
+# In _apply_incoming_payload (Line ~751)
+    enc_bytes = base64.b64decode(face_enc_b64)
+    c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", 
+          (sqlite3.Binary(enc_bytes), emp_id))
+    print(f"[UDP] Face encoding saved for {emp_id}: {len(enc_bytes)} bytes")
     conn.commit()
     conn.close()
     recognizer.load_all_encodings()
