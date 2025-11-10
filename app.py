@@ -392,8 +392,10 @@ def migrate_sqlite_schema():
 migrate_sqlite_schema()
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 # ========= NEW: ensure logs table =========
@@ -687,130 +689,56 @@ def _apply_incoming_payload(payload: dict):
         if not t:
             return
         # ignore messages from ourselves (already filtered at caller)
-        
-        # handle fingerprint register/edit: expects 'user_id' and 'template' (base64)
+        # handle fingerprint register: expects 'user_id' and 'template' (base64)
         if t == "finger_register":
             try:
                 import base64
                 tpl_b64 = payload.get("template")
                 tid = payload.get("user_id")
                 username = payload.get("username") or ""
-                emp_id = payload.get("emp_id") or ""
                 if tpl_b64 and tid:
                     db = sqlite3.connect(DB_PATH, check_same_thread=False)
                     db.execute("INSERT OR REPLACE INTO fingerprints (id, username, template) VALUES (?, ?, ?)",
                                (int(tid), username or "", sqlite3.Binary(base64.b64decode(tpl_b64))))
                     db.commit()
-                    # Also update mapping tables
-                    if emp_id:
-                        db.execute("CREATE TABLE IF NOT EXISTS fingerprint_map(emp_id TEXT PRIMARY KEY, template_id INTEGER UNIQUE NOT NULL, name TEXT, created_at TEXT DEFAULT (datetime('now')))")
-                        db.execute("INSERT OR REPLACE INTO fingerprint_map(emp_id, template_id, name) VALUES (?,?,?)", (emp_id, int(tid), username or None))
-                        db.execute("CREATE TABLE IF NOT EXISTS user_finger_map(emp_id TEXT PRIMARY KEY, template_id INTEGER UNIQUE)")
-                        db.execute("INSERT OR REPLACE INTO user_finger_map(emp_id, template_id) VALUES (?, ?)", (emp_id, int(tid)))
-                        db.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB, role TEXT, birthdate TEXT, rfid_cards TEXT, template_id INTEGER)")
-                        db.execute("UPDATE users SET template_id=? WHERE emp_id=?", (int(tid), emp_id))
-                        db.commit()
                     db.close()
-                    print(f"[UDP] Fingerprint registered: template_id={tid}, emp_id={emp_id}")
             except Exception as e:
-                print("[UDP apply finger_register] error:", e)
-        
-        elif t == "finger_delete":
-            try:
-                tid = payload.get("user_id")
-                emp_id = payload.get("emp_id") or ""
-                if tid:
-                    db = sqlite3.connect(DB_PATH, check_same_thread=False)
-                    db.execute("DELETE FROM fingerprints WHERE id=?", (int(tid),))
-                    if emp_id:
-                        db.execute("DELETE FROM fingerprint_map WHERE emp_id=?", (emp_id,))
-                        db.execute("DELETE FROM user_finger_map WHERE emp_id=?", (emp_id,))
-                    db.commit()
-                    db.close()
-                    print(f"[UDP] Fingerprint deleted: template_id={tid}, emp_id={emp_id}")
-            except Exception as e:
-                print("[UDP apply finger_delete] error:", e)
-        
+                print("[UDP apply finger] error:", e)
         elif t in ("user_register", "user_edit", "user_delete"):
             try:
                 emp_id = payload.get("emp_id")
                 name = payload.get("name")
-                role = payload.get("role")
                 face_enc_b64 = payload.get("face_encoding")
                 display_img_b64 = payload.get("display_image")
                 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
                 c = conn.cursor()
-                c.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB, role TEXT, birthdate TEXT, rfid_cards TEXT, template_id INTEGER)")
+                c.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB)")
                 if t == "user_delete":
                     c.execute("DELETE FROM users WHERE emp_id=?", (emp_id,))
-                    # Also delete from fingerprint mappings
-                    c.execute("DELETE FROM fingerprint_map WHERE emp_id=?", (emp_id,))
-                    c.execute("DELETE FROM user_finger_map WHERE emp_id=?", (emp_id,))
-                    print(f"[UDP] User deleted: {emp_id}")
                 else:
                     c.execute("INSERT OR IGNORE INTO users (emp_id, name) VALUES (?, ?)", (emp_id, name or ""))
                     if name is not None:
                         c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
-                    if role is not None:
-                        c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
                     if face_enc_b64:
                         try:
                             enc_bytes = base64.b64decode(face_enc_b64)
                             c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", (enc_bytes, emp_id))
                         except Exception:
                             pass
-                    # In _apply_incoming_payload (Line ~762)
-                        if "," in display_img_b64:
-                            display_img_b64 = display_img_b64.split(",")[-1]
-                        img_bytes = base64.b64decode(display_img_b64)
-                        c.execute("UPDATE users SET display_image=? WHERE emp_id=?", 
-                                  (sqlite3.Binary(img_bytes), emp_id))
-                        print(f"[UDP] Display image saved for {emp_id}: {len(img_bytes)} bytes")
+                    if display_img_b64:
+                        try:
+                            img_bytes = base64.b64decode(display_img_b64.split(",")[-1])
+                            c.execute("UPDATE users SET display_image=? WHERE emp_id=?", (sqlite3.Binary(img_bytes), emp_id))
+                        except Exception:
+                            pass
                 conn.commit()
                 conn.close()
-                
-                # Reload face encodings if face recognizer is available
-                try:
-                    recognizer.load_all_encodings()
-                except:
-                    pass
             except Exception as e:
                 print("[UDP apply user] error:", e)
-        
-        elif t == "rfid_register":
-            try:
-                emp_id = payload.get("emp_id")
-                name = payload.get("name")
-                card_id = payload.get("card_id")
-                if emp_id and card_id:
-                    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                    c = conn.cursor()
-                    c.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB, role TEXT, birthdate TEXT, rfid_cards TEXT, template_id INTEGER)")
-                    # Get existing rfid_cards
-                    row = c.execute("SELECT rfid_cards FROM users WHERE emp_id=?", (emp_id,)).fetchone()
-                    if row:
-                        existing = row[0] or ""
-                        cards = [c.strip() for c in existing.split(",") if c.strip()]
-                        if card_id not in cards:
-                            cards.append(card_id)
-                        c.execute("UPDATE users SET rfid_cards=? WHERE emp_id=?", (",".join(cards), emp_id))
-                    else:
-                        c.execute("INSERT INTO users (emp_id, name, rfid_cards) VALUES (?, ?, ?)", (emp_id, name or "", card_id))
-                    conn.commit()
-                    conn.close()
-                    print(f"[UDP] RFID registered: emp_id={emp_id}, card={card_id}")
-            except Exception as e:
-                print("[UDP apply rfid_register] error:", e)
-        
         elif t == "user_login":
-            # Login events are already logged locally via insert_login_log
-            # This is just for informational purposes
-            emp_id = payload.get("emp_id")
-            name = payload.get("name")
-            medium = payload.get("medium")
-            print(f"[UDP] Login event received: emp_id={emp_id}, name={name}, medium={medium}")
+            # optionally log login events locally (not implemented here)
             pass
-        
+        # add other types as needed
     except Exception as e:
         print("[UDP apply payload] error:", e)
 
@@ -1227,14 +1155,34 @@ load_pgcfg_from_settings()
 # Fingerprint DB (unified in users.db)
 # -----------------------------------------------------------------------------
 def get_finger_db():
-    db = sqlite3.connect(DB_PATH, check_same_thread=False)  # unified DB
+    db = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)  # unified DB
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=30000")
     db.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
         id INTEGER PRIMARY KEY,
         username TEXT,
         template BLOB NOT NULL
     )''')
     return db
+
+# Database retry wrapper for handling locks
+def db_retry(func, max_retries=5, initial_delay=0.1):
+    """Retry database operations on lock errors with exponential backoff"""
+    import random
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < max_retries - 1:
+                delay = initial_delay * (2 ** attempt) + random.uniform(0, 0.1)
+                print(f"[DB] Database locked, retry {attempt + 1}/{max_retries} after {delay:.2f}s")
+                time.sleep(delay)
+                continue
+            raise
+    raise sqlite3.OperationalError(f"Database still locked after {max_retries} retries")
+
+
 
 # ---------- Template-ID allocation helpers ----------
 def _first_free_template_id(conn) -> int:
@@ -1256,38 +1204,64 @@ def _first_free_template_id(conn) -> int:
     return tid
 
 def get_or_reserve_template_id(emp_id: str) -> tuple[int, bool]:
+    """Get or reserve template ID with retry logic for database locks"""
     emp_id = str(emp_id).strip()
     if not emp_id:
         raise ValueError("emp_id required")
 
-    conn = get_db_connection()
-    try:
-        r = conn.execute("SELECT template_id FROM user_finger_map WHERE emp_id=?", (emp_id,)).fetchone()
-        if r and r["template_id"] is not None:
-            return int(r["template_id"]), False
+    def _do_reserve():
+        conn = get_db_connection()
+        try:
+            r = conn.execute("SELECT template_id FROM user_finger_map WHERE emp_id=?", (emp_id,)).fetchone()
+            if r and r["template_id"] is not None:
+                return int(r["template_id"]), False
 
-        tid = _first_free_template_id(conn)
-        conn.execute(
-            "INSERT INTO user_finger_map(emp_id, template_id) VALUES (?, ?) "
-            "ON CONFLICT(emp_id) DO UPDATE SET template_id=excluded.template_id",
-            (emp_id, tid)
-        )
-        conn.commit()
-        return tid, True
-    finally:
-        conn.close()
+            tid = _first_free_template_id(conn)
+            conn.execute(
+                "INSERT INTO user_finger_map(emp_id, template_id) VALUES (?, ?) "
+                "ON CONFLICT(emp_id) DO UPDATE SET template_id=excluded.template_id",
+                (emp_id, tid)
+            )
+            conn.commit()
+            return tid, True
+        finally:
+            conn.close()
+    
+    return db_retry(_do_reserve)
 
 def get_template_id_if_any(emp_id: str) -> int | None:
+    """Get template ID if exists, with retry logic for database locks"""
     emp_id = str(emp_id).strip()
     if not emp_id:
         return None
-    conn = get_db_connection()
-    try:
-        r = conn.execute("SELECT template_id FROM user_finger_map WHERE emp_id=?", (emp_id,)).fetchone()
-        return int(r["template_id"]) if r and r["template_id"] is not None else None
-    finally:
-        conn.close()
+    
+    def _do_get():
+        conn = get_db_connection()
+        try:
+            r = conn.execute("SELECT template_id FROM user_finger_map WHERE emp_id=?", (emp_id,)).fetchone()
+            return int(r["template_id"]) if r and r["template_id"] is not None else None
+        finally:
+            conn.close()
+    
+    return db_retry(_do_get)
 
+
+
+# Initialize database for concurrent access
+def init_database():
+    '''Initialize database with WAL mode for concurrent access'''
+    try:
+        conn = get_db_connection()
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")
+        conn.execute("PRAGMA page_size=4096")
+        conn.execute("PRAGMA cache_size=10000")
+        conn.close()
+        print("[DB] Database initialized with WAL mode")
+    except Exception as e:
+        print(f"[DB] Warning: Could not initialize WAL mode: {e}")
 
 # -----------------------------------------------------------------------------
 # Start PG sync background worker and ensure PG table at boot
@@ -1759,21 +1733,7 @@ def api_user_upsert():
         conn.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
         conn.commit()
         tid, _ = get_or_reserve_template_id(emp_id)
-        
-        # BROADCAST to mesh network
-        try:
-            payload = {
-                "type": "user_register",
-                "emp_id": emp_id,
-                "name": name,
-                "role": role,
-                "ts": time.time()
-            }
-            send_reliable(payload, targets=None)
-        except Exception as e:
-            print("[broadcast] user_register error:", e)
-        
-        return jsonify({"success": True, "template_id": tid})
+        return jsonify({"success": True, "message": "User registered successfully"})
     finally:
         conn.close()
 
@@ -1924,33 +1884,32 @@ def face_register():
     if name:
         c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
     c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
-    # In face_register (Line ~1927)
     c.execute("UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
-            (sqlite3.Binary(encoding_bytes), sqlite3.Binary(img_bytes), emp_id))
-
-# In _apply_incoming_payload (Line ~751)
-    enc_bytes = base64.b64decode(face_enc_b64)
-    c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", 
-          (sqlite3.Binary(enc_bytes), emp_id))
-    print(f"[UDP] Face encoding saved for {emp_id}: {len(enc_bytes)} bytes")
+              (encoding_bytes, img_bytes, emp_id))
     conn.commit()
     conn.close()
     recognizer.load_all_encodings()
 
-    # BROADCAST to mesh network
+    # Mesh sync removed — stubs will safely do nothing
     try:
-        payload = {
-            "type": "user_register",
-            "emp_id": emp_id,
-            "name": name,
-            "role": role,
-            "face_encoding": base64.b64encode(encoding_bytes).decode(),
-            "display_image": base64.b64encode(img_bytes).decode(),
-            "ts": time.time()
-        }
-        send_reliable(payload, targets=None)
-    except Exception as e:
-        print("[broadcast] face_register error:", e)
+        state = load_mesh_state()
+        self_ip = get_self_ip()
+        if state.get("devices"):
+            payload = {
+                "type": "face_sync",
+                "emp_id": emp_id,
+                "name": name,
+                "registered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "encoding": base64.b64encode(encoding_bytes).decode(),
+                "display_image": base64.b64encode(img_bytes).decode()
+            }
+            for dev in state.get("devices", []):
+                ip = dev.get("ip")
+                if ip and ip != self_ip:
+                    try: send_udp_json(ip, 5006, payload)
+                    except Exception: pass
+    except Exception:
+        pass
 
     return jsonify({"success": True, "message": "Face registered successfully."})
 
@@ -1971,31 +1930,32 @@ def face_edit():
     result = recognizer.update_user_encoding(frame, emp_id)
     recognizer.load_all_encodings()
 
-    # BROADCAST to mesh network
+    # mesh/tcp removed — stubs do nothing
     try:
-        if result:
+        state = load_mesh_state()
+        self_ip = get_self_ip()
+        if result and state.get("devices"):
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute("SELECT face_encoding, name, display_image, role FROM users WHERE emp_id=?", (emp_id,))
+            c.execute("SELECT face_encoding, name, display_image FROM users WHERE emp_id=?", (emp_id,))
             row = c.fetchone()
             conn.close()
             if row:
-                encoding_bytes = row.get("face_encoding")
-                name = row.get("name")
-                disp_img = row.get("display_image")
-                role = row.get("role", "User")
+                encoding_bytes, name, disp_img = row["face_encoding"], row["name"], row["display_image"]
                 payload = {
-                    "type": "user_edit",
+                    "type": "face_edit",
                     "emp_id": emp_id,
                     "name": name,
-                    "role": role,
-                    "face_encoding": base64.b64encode(encoding_bytes).decode() if encoding_bytes else None,
-                    "display_image": base64.b64encode(disp_img).decode() if disp_img else None,
-                    "ts": time.time()
+                    "encoding": base64.b64encode(encoding_bytes).decode(),
+                    "display_image": base64.b64encode(disp_img).decode() if disp_img else ""
                 }
-                send_reliable(payload, targets=None)
-    except Exception as e:
-        print("[broadcast] face_edit error:", e)
+                for dev in state.get("devices", []):
+                    ip = dev.get("ip")
+                    if ip and ip != self_ip:
+                        try: send_udp_json(ip, 5006, payload)
+                        except Exception: pass
+    except Exception:
+        pass
 
     return jsonify({"success": bool(result), "message": "Edit successful" if result else "Edit failed"})
 
@@ -2355,19 +2315,26 @@ def api_finger_register():
                         conn.execute("UPDATE users SET template_id=? WHERE emp_id=?", (int(template_id), emp_id))
                         conn.commit()
 
-                    # BROADCAST to mesh network
+                    # broadcasts removed — stubs will do nothing
                     try:
-                        payload = {
-                            "type": "finger_register",
-                            "user_id": int(template_id),
-                            "username": username or emp_id or "",
-                            "template": base64.b64encode(tpl).decode(),
-                            "emp_id": emp_id or "",
-                            "ts": time.time()
-                        }
-                        send_reliable(payload, targets=None)
-                    except Exception as e:
-                        print("[broadcast] finger_register error:", e)
+                        state = load_mesh_state()
+                        self_ip = get_self_ip()
+                        if state.get("devices"):
+                            payload = {
+                                "type": "finger_register",
+                                "user_id": int(template_id),
+                                "username": username or emp_id or "",
+                                "template": base64.b64encode(tpl).decode()
+                            }
+                            for dev in state.get("devices", []):
+                                ip = dev.get("ip")
+                                if ip and ip != self_ip:
+                                    try: send_udp_json(ip, 5006, payload)
+                                    except Exception as e: print("[UDP-STUB] finger_register broadcast failed:", e)
+                            try: broadcast_tcp(payload)
+                            except Exception: pass
+                    except Exception:
+                        pass
 
                     return jsonify(success=True, template_id=int(template_id),
                                    message=f"Fingerprint enrolled (ID {template_id})."), 200
@@ -2491,19 +2458,24 @@ def api_finger_edit():
                            (user_id, username, sqlite3.Binary(tpl)))
                 db.commit()
 
-                # BROADCAST to mesh network
+                # mesh/tcp removed — stubs do nothing
                 try:
-                    payload = {
-                        "type": "finger_register",
-                        "user_id": user_id,
-                        "username": username,
-                        "template": base64.b64encode(tpl).decode(),
-                        "emp_id": emp_id or "",
-                        "ts": time.time()
-                    }
-                    send_reliable(payload, targets=None)
-                except Exception as e:
-                    print("[broadcast] finger_edit error:", e)
+                    state = load_mesh_state()
+                    self_ip = get_self_ip()
+                    if state.get("devices"):
+                        payload = {
+                            "type": "finger_edit",
+                            "user_id": user_id,
+                            "username": username,
+                            "template": base64.b64encode(tpl).decode()
+                        }
+                        for dev in state["devices"]:
+                            ip = dev.get("ip")
+                            if ip != self_ip:
+                                try: send_udp_json(ip, 5006, payload)
+                                except Exception: pass
+                except Exception:
+                    pass
 
                 return True, "Fingerprint re-enrolled"
             finally:
@@ -2555,19 +2527,19 @@ def api_finger_delete():
                 db.execute("DELETE FROM fingerprints WHERE id=?", (user_id,))
                 db.commit()
                 db.close()
-                
-                # BROADCAST to mesh network
+                # mesh/tcp removed — stubs do nothing
                 try:
-                    payload = {
-                        "type": "finger_delete",
-                        "user_id": user_id,
-                        "emp_id": emp_id or "",
-                        "ts": time.time()
-                    }
-                    send_reliable(payload, targets=None)
-                except Exception as e:
-                    print("[broadcast] finger_delete error:", e)
-                
+                    state = load_mesh_state()
+                    self_ip = get_self_ip()
+                    if state.get("devices"):
+                        payload = {"type": "finger_delete", "user_id": user_id}
+                        for dev in state["devices"]:
+                            ip = dev.get("ip")
+                            if ip != self_ip:
+                                try: send_udp_json(ip, 5006, payload)
+                                except Exception: pass
+                except Exception:
+                    pass
                 return True, f"Deleted Template ID {user_id} from sensor and DB."
             else:
                 db.close()
@@ -2637,20 +2609,6 @@ def api_rfid_register():
         out.update(msg)
         if "message" not in out:
             out["message"] = "RFID registered"
-        
-        # BROADCAST to mesh network
-        if ok and "card_id" in msg:
-            try:
-                payload = {
-                    "type": "rfid_register",
-                    "emp_id": employee_id,
-                    "name": name,
-                    "card_id": msg["card_id"],
-                    "ts": time.time()
-                }
-                send_reliable(payload, targets=None)
-            except Exception as e:
-                print("[broadcast] rfid_register error:", e)
     else:
         out["message"] = str(msg)
     return jsonify(out)
@@ -2703,20 +2661,6 @@ def api_rfid_edit():
     if not check_admin_password(admin_pw):
         return jsonify({"success": False, "message": "Incorrect admin password."})
     ok, msg = rfid.rfid_edit(employee_id, new_name)
-    
-    # BROADCAST to mesh network
-    if ok:
-        try:
-            payload = {
-                "type": "user_edit",
-                "emp_id": employee_id,
-                "name": new_name,
-                "ts": time.time()
-            }
-            send_reliable(payload, targets=None)
-        except Exception as e:
-            print("[broadcast] rfid_edit error:", e)
-    
     return jsonify({"success": ok, "message": msg})
 
 @app.route("/api/rfid_delete", methods=["POST"])
@@ -2727,19 +2671,6 @@ def api_rfid_delete():
     if not check_admin_password(admin_pw):
         return jsonify({"success": False, "message": "Incorrect admin password."})
     ok, msg = rfid.rfid_delete(employee_id)
-    
-    # BROADCAST to mesh network
-    if ok:
-        try:
-            payload = {
-                "type": "user_delete",
-                "emp_id": employee_id,
-                "ts": time.time()
-            }
-            send_reliable(payload, targets=None)
-        except Exception as e:
-            print("[broadcast] rfid_delete error:", e)
-    
     return jsonify({"success": ok, "message": msg})
 
 
@@ -2932,16 +2863,17 @@ def delete_user():
     recognizer.delete_user(emp_id)
     recognizer.load_all_encodings()
 
-    # BROADCAST to mesh network
-    try:
-        payload = {
-            "type": "user_delete",
-            "emp_id": emp_id,
-            "ts": time.time()
-        }
-        send_reliable(payload, targets=None)
-    except Exception as e:
-        print("[broadcast] user_delete error:", e)
+    # NOTE: broadcasting to other devices (TCP/UDP) has been removed.
+    # If you want to re-enable mesh broadcasts later, implement a safe broadcasting mechanism here.
+    # state = load_mesh_state()
+    # self_ip = get_self_ip()
+    # if state.get("is_root", False) and state.get("devices"):
+    #     payload = {"type": "user_delete", "emp_id": emp_id}
+    #     for dev in state["devices"]:
+    #         ip = dev["ip"]
+    #         if ip != self_ip:
+    #             # broadcasting intentionally omitted
+    #             pass
 
     return jsonify({"success": True, "message": f"User {emp_id} deleted from system."})
 
