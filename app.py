@@ -17,6 +17,9 @@ from datetime import datetime, date, timedelta
 from threading import Event, Lock
 import qrcode
 import pandas as pd  # XLSX import/export
+import uuid, json
+import sqlite3
+import time
 
 from flask import (
     Flask,
@@ -186,11 +189,11 @@ def api_thankyou_events():
 # -----------------------------------------------------------------------------
 ADMIN_PW_FILE = "admin_pw.txt"
 USERS_IMG_DIR = "./users_img"
-DB_PATH = os.environ.get("APP_DB_PATH", "users.db")
-UDP_PORT = int(os.environ.get("UDP_PORT", "5006"))
-BROADCAST_ADDR = os.environ.get("BROADCAST_ADDR", "255.255.255.255")
-app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET", "supersecret")
+DB_PATH = globals().get("DB_PATH", "users.db")   # make sure this matches your app's DB_PATH
+UDP_QUEUE_TABLE = globals().get("UDP_QUEUE_TABLE", "udp_queue")
+DEFAULT_UDP_PORT = int(globals().get("UDP_PORT", 5006))
+BROADCAST_ADDR = globals().get("BROADCAST_ADDR", "255.255.255.255")
+
 
 
 # --- Prevent client/proxy caching for all JSON endpoints and streams ---
@@ -470,7 +473,6 @@ _ACKED_MSGS = set()
 _ACKED_MSGS_LOCK = threading.Lock()
 
 # persistent queue (sqlite) table name
-UDP_QUEUE_TABLE = "udp_queue"
 
 def ensure_udp_queue_table():
     try:
@@ -597,34 +599,52 @@ def _delete_queue_item(msg_id):
     except Exception as e:
         print("[UDP] delete queue error:", e)
 
-def send_reliable(payload: dict, targets=None, max_retries=5, retry_interval=1.0):
+def send_reliable(payload_obj, targets=None, port=None):
     """
-    Enqueue payload(s) for reliable UDP delivery.
-    - payload: dict (will be JSON-serialized). The function adds _msg_id and _from fields.
-    - targets: list of IPs (strings). If None -> broadcast address will be used.
-    Returns generated msg_id (string) or list of msg_ids for multiple targets.
+    Best-effort bulk send:
+      - payload_obj: JSON-serializable dict
+      - targets: list of IP strings; if None -> broadcast to BROADCAST_ADDR
+      - port: if provided use this port (int); otherwise DEFAULT_UDP_PORT
+    Behavior:
+      - Try to send immediately via send_udp_json; if fails, queue per-target.
     """
-    ensure_udp_queue_table()
-    payload_copy = dict(payload)
-    payload_copy["_msg_id"] = str(uuid.uuid4())
-    payload_copy["_from"] = get_self_ip()
-    payload_json = json.dumps(payload_copy, separators=(',', ':'))
-    msg_ids = []
-    if not targets:
-        # use broadcast
-        msg_id = payload_copy["_msg_id"]
-        _insert_queue_item(msg_id, BROADCAST_ADDR, payload_json)
-        msg_ids.append(msg_id)
-    else:
-        for t in targets:
-            msg_id = str(uuid.uuid4())
-            p = dict(payload_copy)
-            p["_msg_id"] = msg_id
-            payload_json_t = json.dumps(p, separators=(',', ':'))
-            _insert_queue_item(msg_id, t, payload_json_t)
-            msg_ids.append(msg_id)
-    return msg_ids[0] if len(msg_ids)==1 else msg_ids
+    port = int(port) if port else DEFAULT_UDP_PORT
+    # if targets is falsy, send a broadcast (single queue entry)
+    if not targets or len(targets) == 0:
+        ok = send_udp_json(BROADCAST_ADDR, port, payload_obj, use_broadcast=True)
+        if ok:
+            return True
+        # fallback: queue a broadcast
+        qid = queue_udp_message(BROADCAST_ADDR, port, payload_obj)
+        return qid is not None
 
+    # multiple targets: try direct send, queue if fails
+    all_ok = True
+    for ip in targets:
+        try:
+            ok = send_udp_json(ip, port, payload_obj, use_broadcast=False)
+            if not ok:
+                all_ok = False
+                # queue for retry specifically to this target
+                queue_udp_message(ip, port, payload_obj)
+        except TypeError:
+            # older / other definition of send_udp_json that lacks use_broadcast
+            try:
+                ok = send_udp_json(ip, port, payload_obj)
+                if not ok:
+                    all_ok = False
+                    queue_udp_message(ip, port, payload_obj)
+            except Exception as e:
+                print("[send_reliable] send exception (fallback):", e)
+                all_ok = False
+                queue_udp_message(ip, port, payload_obj)
+        except Exception as e:
+            print("[send_reliable] unexpected send error:", e)
+            all_ok = False
+            queue_udp_message(ip, port, payload_obj)
+    return all_ok
+    
+    
 def _udp_queue_worker(stop_event=None):
     """Background worker that reads pending queue and sends, handles ACKs and retries."""
     send_sock = _make_send_socket()
@@ -749,65 +769,34 @@ UDP_QUEUE_THREAD.start()
 UDP_LISTENER_THREAD.start()
 
 
-def _apply_incoming_payload(payload: dict):
-    """Apply incoming payloads to local DB. This is minimal and safe; expand as needed."""
+def _apply_incoming_payload(obj):
     try:
-        t = payload.get("type")
-        if not t:
-            return
-        # ignore messages from ourselves (already filtered at caller)
-        # handle fingerprint register: expects 'user_id' and 'template' (base64)
-        if t == "finger_register":
-            try:
-                import base64
-                tpl_b64 = payload.get("template")
-                tid = payload.get("user_id")
-                username = payload.get("username") or ""
-                if tpl_b64 and tid:
-                    db = sqlite3.connect(DB_PATH, check_same_thread=False)
-                    db.execute("INSERT OR REPLACE INTO fingerprints (id, username, template) VALUES (?, ?, ?)",
-                               (int(tid), username or "", sqlite3.Binary(base64.b64decode(tpl_b64))))
-                    db.commit()
-                    db.close()
-            except Exception as e:
-                print("[UDP apply finger] error:", e)
-        elif t in ("user_register", "user_edit", "user_delete"):
-            try:
-                emp_id = payload.get("emp_id")
-                name = payload.get("name")
-                face_enc_b64 = payload.get("face_encoding")
-                display_img_b64 = payload.get("display_image")
-                conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                c = conn.cursor()
-                c.execute("CREATE TABLE IF NOT EXISTS users (emp_id TEXT PRIMARY KEY, name TEXT, face_encoding BLOB, display_image BLOB)")
-                if t == "user_delete":
-                    c.execute("DELETE FROM users WHERE emp_id=?", (emp_id,))
-                else:
-                    c.execute("INSERT OR IGNORE INTO users (emp_id, name) VALUES (?, ?)", (emp_id, name or ""))
-                    if name is not None:
-                        c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
-                    if face_enc_b64:
-                        try:
-                            enc_bytes = base64.b64decode(face_enc_b64)
-                            c.execute("UPDATE users SET face_encoding=? WHERE emp_id=?", (enc_bytes, emp_id))
-                        except Exception:
-                            pass
-                    if display_img_b64:
-                        try:
-                            img_bytes = base64.b64decode(display_img_b64.split(",")[-1])
-                            c.execute("UPDATE users SET display_image=? WHERE emp_id=?", (sqlite3.Binary(img_bytes), emp_id))
-                        except Exception:
-                            pass
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print("[UDP apply user] error:", e)
-        elif t == "user_login":
-            # optionally log login events locally (not implemented here)
-            pass
-        # add other types as needed
+        t = obj.get('type')
+        if t == 'user_upsert' and isinstance(obj.get('user'), dict):
+            u = obj['user']
+            emp_id = u.get('emp_id')
+            # map user fields as used in your DB
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            c = conn.cursor()
+            # parameterized upsert (example, adapt columns to your schema)
+            c.execute("""
+               INSERT INTO users(emp_id, emp_name, face_encoding, display_image)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(emp_id) DO UPDATE SET
+                 emp_name=excluded.emp_name,
+                 face_encoding=excluded.face_encoding,
+                 display_image=excluded.display_image
+            """, (
+               emp_id,
+               u.get('emp_name'),
+               u.get('face_encoding'),
+               u.get('display_image'),
+            ))
+            conn.commit()
+            conn.close()
+            print(f"[MESH] applied user_upsert for emp_id={emp_id} from {obj.get('from')}")
     except Exception as e:
-        print("[UDP apply payload] error:", e)
+        print("[MESH] apply incoming payload error:", e)
 
 # start background threads
 try:
@@ -868,19 +857,50 @@ def send_udp_json(target_ip, port, payload, use_broadcast: bool = False):
             pass
         return False
 
-def queue_udp_message(ip, port, payload):
+def queue_udp_message(target_ip, target_port, payload_obj, msg_id=None):
+    """
+    Adds (or updates) an entry into udp_queue.
+    - target_ip: str or None (None will be stored as NULL)
+    - target_port: int or convertible numeric; will default to DEFAULT_UDP_PORT
+    - payload_obj: JSON-serializable object (we will json.dumps it)
+    - msg_id: optional string id; if not provided we generate uuid4 hex
+    Returns: msg_id on success, None on failure
+    """
     try:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        # normalize
+        if not msg_id:
+            msg_id = str(uuid.uuid4())
+        if target_port is None or target_port == "":
+            target_port = DEFAULT_UDP_PORT
+        try:
+            target_port = int(target_port)
+        except Exception:
+            target_port = DEFAULT_UDP_PORT
+
+        # serialize payload to JSON string (safe)
+        payload_json = json.dumps(payload_obj, separators=(',', ':'), ensure_ascii=False)
+
+        conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
         c = conn.cursor()
-        c.execute(f"INSERT INTO {UDP_QUEUE_TABLE} (target_ip, target_port, payload) VALUES (?, ?, ?)",
-                  (ip, int(port), json.dumps(payload)))
+        # Use parameterized SQL to avoid datatype mismatch
+        c.execute(
+            f"INSERT OR REPLACE INTO {UDP_QUEUE_TABLE} (id, target_ip, target_port, payload, retries, last_sent) VALUES (?, ?, ?, ?, ?, ?)",
+            (msg_id, target_ip, target_port, payload_json, 0, 0.0)
+        )
         conn.commit()
         conn.close()
-        return True
+        # debug log
+        print(f"[UDP] queued msg {msg_id} -> {target_ip}:{target_port}")
+        return msg_id
+    except sqlite3.IntegrityError as e:
+        print("[UDP] queue insert integrity error:", e)
+        return None
+    except sqlite3.OperationalError as e:
+        print("[UDP] queue insert operational error:", e)
+        return None
     except Exception as e:
         print("[UDP] queue insert error:", e)
-        return False
-
+        return None
 
 def broadcast_login_udp(emp_id, name, medium):
     try:
@@ -1828,24 +1848,49 @@ def broadcast_login_tcp(emp_id, name, medium):
 # -----------------------------------------------------------------------------
 @app.route("/api/user_upsert", methods=["POST"])
 def api_user_upsert():
-    data = request.get_json(force=True)
+    data = request.get_json(force=True) or {}
     emp_id = (data.get("emp_id") or "").strip()
     name   = (data.get("name") or "").strip()
     role   = (data.get("role") or "User").strip()
+
     if not emp_id:
         return jsonify({"success": False, "message": "Employee ID required."}), 400
+
     conn = get_db_connection()
     try:
+        # ensure row exists and update fields if provided
         conn.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
         if name:
             conn.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
         conn.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
+
         conn.commit()
-        tid, _ = get_or_reserve_template_id(emp_id)
-        return jsonify({"success": True, "message": "User registered successfully"})
+
+        # reserve/get template id (your existing helper)
+        try:
+            tid, _ = get_or_reserve_template_id(emp_id)
+        except Exception as e:
+            # If reservation fails, still continue but warn in logs
+            print("[USER_UPSERT] get_or_reserve_template_id error:", e)
+            tid = None
+
+        # Broadcast to mesh — use the safe helper that reads canonical DB row and sends
+        mesh_ok = False
+        try:
+            # broadcast_user_upsert_by_emp should be defined elsewhere in app.py
+            mesh_ok = bool(broadcast_user_upsert_by_emp(emp_id))
+        except Exception as e:
+            mesh_ok = False
+            print("[MESH] broadcast_user_upsert_by_emp error in api_user_upsert:", e)
+
+        return jsonify({
+            "success": True,
+            "message": "User registered successfully",
+            "template_id": tid,
+            "mesh_sent": mesh_ok
+        })
     finally:
         conn.close()
-
 
 # -----------------------------------------------------------------------------
 # Face login & helpers
@@ -1959,7 +2004,7 @@ def check_face_duplicate():
 
 @app.route("/api/face_register", methods=["POST"])
 def face_register():
-    data = request.json
+    data = request.json or {}
     img_data = (data.get("image") or "").split(",")[-1]
     emp_id = (data.get("employee_id") or data.get("emp_id") or "").strip()
     name   = (data.get("name") or "").strip()
@@ -1968,106 +2013,183 @@ def face_register():
     if not img_data or not emp_id:
         return jsonify({"success": False, "message": "image and emp_id required"}), 400
 
-    img_bytes = base64.b64decode(img_data)
+    # decode image
+    try:
+        img_bytes = base64.b64decode(img_data)
+    except Exception as e:
+        return jsonify({"success": False, "message": "Image decode failed: " + str(e)}), 400
+
     nparr = np.frombuffer(img_bytes, np.uint8)
     bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if bgr is None:
-        return jsonify({"success": False, "message": "Image decode failed"})
+        return jsonify({"success": False, "message": "Image decode failed"}), 400
     frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
+    # duplicate check
     match = recognizer.find_duplicate(frame)
     if match:
         return jsonify({
             "success": False,
-            "message": f"Face already registered (Emp ID: {match['emp_id']}, Name: {match['name']})"
-        })
+            "message": f"Face already registered (Emp ID: {match.get('emp_id')}, Name: {match.get('name')})"
+        }), 400
 
+    # save face using your recognizer (returns (True, encoding_array) on success)
     result, encoding_arr = recognizer.save_face(frame)
     if not result:
-        return jsonify({"success": False, "message": encoding_arr})
+        return jsonify({"success": False, "message": encoding_arr}), 400
 
-    encoding_bytes = encoding_arr.astype(np.float64).tobytes()
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
-    if name:
-        c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
-    c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
-    c.execute("UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
-              (encoding_bytes, img_bytes, emp_id))
-    conn.commit()
-    conn.close()
-    recognizer.load_all_encodings()
-
-    # Mesh sync removed — stubs will safely do nothing
+    # persist to DB
     try:
-        state = load_mesh_state()
-        self_ip = get_self_ip()
-        if state.get("devices"):
-            payload = {
-                "type": "face_sync",
-                "emp_id": emp_id,
-                "name": name,
-                "registered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "encoding": base64.b64encode(encoding_bytes).decode(),
-                "display_image": base64.b64encode(img_bytes).decode()
-            }
-            for dev in state.get("devices", []):
-                ip = dev.get("ip")
-                if ip and ip != self_ip:
-                    try: send_udp_json(ip, 5006, payload)
-                    except Exception: pass
+        encoding_bytes = encoding_arr.astype(np.float64).tobytes()
     except Exception:
-        pass
+        # fallback: store raw float32 bytes if conversion fails
+        encoding_bytes = encoding_arr.astype(np.float32).tobytes()
 
-    return jsonify({"success": True, "message": "Face registered successfully."})
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
+        if name:
+            c.execute("UPDATE users SET name=? WHERE emp_id=?", (name, emp_id))
+        c.execute("UPDATE users SET role=? WHERE emp_id=?", (role, emp_id))
+        c.execute(
+            "UPDATE users SET face_encoding=?, display_image=? WHERE emp_id=?",
+            (encoding_bytes, img_bytes, emp_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Refresh recognizer encodings
+    try:
+        recognizer.load_all_encodings()
+    except Exception as e:
+        print("[FACE] recognizer.load_all_encodings error:", e)
+
+    # Reserve/get template id (if you use templates)
+    try:
+        tid, _ = get_or_reserve_template_id(emp_id)
+    except Exception as e:
+        print("[FACE] get_or_reserve_template_id error:", e)
+        tid = None
+
+    # Broadcast the upsert to mesh in a safe way (reads DB row and sends/queues)
+    try:
+        ok = broadcast_user_upsert_by_emp(emp_id)
+        print(f"[MESH] face_register broadcast_user_upsert_by_emp emp_id={emp_id} ok={ok}")
+    except Exception as e:
+        print("[MESH] face_register broadcast error:", e)
+
+    return jsonify({"success": True, "message": "Face registered successfully.", "template_id": tid})
+
+
+# helper to broadcast face_edit specifically (sends encoding+image)
+def broadcast_face_edit(emp_id):
+    """
+    Fetch user's encoding and display image from DB and send as type 'face_edit'.
+    Uses send_reliable() to attempt immediate send and queue on failure.
+    """
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT face_encoding, display_image, name FROM users WHERE emp_id=?", (emp_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            print(f"[MESH] broadcast_face_edit: no user row for emp_id={emp_id}")
+            return False
+
+        # row could be a sqlite3.Row or tuple depending on get_db_connection; normalize:
+        if isinstance(row, dict):
+            enc_bytes = row.get("face_encoding")
+            disp = row.get("display_image")
+            name = row.get("name")
+        else:
+            # assume tuple in order: face_encoding, display_image, name
+            enc_bytes = row[0]
+            disp = row[1]
+            name = row[2] if len(row) > 2 else None
+
+        # encode to base64 for transfer (safe, but can be large)
+        enc_b64 = base64.b64encode(enc_bytes).decode() if enc_bytes else ""
+        disp_b64 = base64.b64encode(disp).decode() if disp else ""
+
+        payload = {
+            "type": "face_edit",
+            "msg_id": str(uuid.uuid4()),
+            "ts": time.time(),
+            "from": get_self_ip() if callable(get_self_ip) else None,
+            "user": {
+                "emp_id": emp_id,
+                "name": name or "",
+                "encoding_b64": enc_b64,
+                "display_image_b64": disp_b64,
+            }
+        }
+
+        # send to saved mesh devices or broadcast
+        saved = get_saved_mesh_devices()
+        if saved:
+            return send_reliable(payload, targets=saved, port=UDP_PORT)
+        else:
+            return send_reliable(payload, targets=None, port=UDP_PORT)
+    except Exception as e:
+        print("[MESH] broadcast_face_edit error:", e)
+        return False
+
 
 @app.route("/api/face_edit", methods=["POST"])
 def face_edit():
-    data = request.json
+    data = request.json or {}
     img_data = (data.get("image") or "").split(",")[-1]
     emp_id = (data.get("emp_id") or "").strip()
     if not img_data or not emp_id:
         return jsonify({"success": False, "message": "image and emp_id required"}), 400
 
-    img_bytes = base64.b64decode(img_data)
+    try:
+        img_bytes = base64.b64decode(img_data)
+    except Exception as e:
+        return jsonify({"success": False, "message": "Image decode failed: " + str(e)}), 400
+
     nparr = np.frombuffer(img_bytes, np.uint8)
     bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if bgr is None:
-        return jsonify({"success": False, "message": "Image decode failed"})
+        return jsonify({"success": False, "message": "Image decode failed"}), 400
     frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    result = recognizer.update_user_encoding(frame, emp_id)
-    recognizer.load_all_encodings()
 
-    # mesh/tcp removed — stubs do nothing
+    # update encoding using recognizer
     try:
-        state = load_mesh_state()
-        self_ip = get_self_ip()
-        if result and state.get("devices"):
+        result = recognizer.update_user_encoding(frame, emp_id)
+    except Exception as e:
+        print("[FACE_EDIT] recognizer.update_user_encoding error:", e)
+        result = False
+
+    # reload encodings
+    try:
+        recognizer.load_all_encodings()
+    except Exception as e:
+        print("[FACE_EDIT] recognizer.load_all_encodings error:", e)
+
+    # persist the new image (if update_user_encoding saved encoding separately, still update display_image)
+    try:
+        if img_bytes:
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute("SELECT face_encoding, name, display_image FROM users WHERE emp_id=?", (emp_id,))
-            row = c.fetchone()
+            c.execute("UPDATE users SET display_image=? WHERE emp_id=?", (img_bytes, emp_id))
+            conn.commit()
             conn.close()
-            if row:
-                encoding_bytes, name, disp_img = row["face_encoding"], row["name"], row["display_image"]
-                payload = {
-                    "type": "face_edit",
-                    "emp_id": emp_id,
-                    "name": name,
-                    "encoding": base64.b64encode(encoding_bytes).decode(),
-                    "display_image": base64.b64encode(disp_img).decode() if disp_img else ""
-                }
-                for dev in state.get("devices", []):
-                    ip = dev.get("ip")
-                    if ip and ip != self_ip:
-                        try: send_udp_json(ip, 5006, payload)
-                        except Exception: pass
-    except Exception:
-        pass
+    except Exception as e:
+        print("[FACE_EDIT] DB update display_image error:", e)
+
+    # Broadcast face_edit to mesh (encodings + image)
+    try:
+        ok = broadcast_face_edit(emp_id)
+        print(f"[MESH] face_edit broadcast_face_edit emp_id={emp_id} ok={ok}")
+    except Exception as e:
+        print("[MESH] face_edit broadcast error:", e)
 
     return jsonify({"success": bool(result), "message": "Edit successful" if result else "Edit failed"})
-
 
 # -----------------------------------------------------------------------------
 # Avatar/image fetch for popup (success-only avatar hydration)
@@ -3233,14 +3355,90 @@ def _is_operator_role(role: str | None) -> bool:
     return r in ("admin", "super admin", "superadmin")
 
 
-def _fetch_user_row(emp_id: str):
-    conn = get_db_connection()
+def _fetch_user_row(emp_id=None):
+    """
+    Fetch user row from users table and return a clean dict with safe keys.
+    If emp_id is None, return the most-recently inserted user as a fallback.
+    Adjust column names to match your users table.
+    """
     try:
-        row = conn.execute("SELECT emp_id, name, role FROM users WHERE emp_id=?", (str(emp_id),)).fetchone()
-        return dict(row) if row else None
-    finally:
+        conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        c = conn.cursor()
+        # change columns to match your users table exactly
+        cols = ["emp_id", "emp_name", "face_encoding", "display_image", "template_id"]
+        if emp_id:
+            c.execute(f"SELECT {','.join(cols)} FROM users WHERE emp_id = ? LIMIT 1", (emp_id,))
+        else:
+            # fallback to last inserted row
+            c.execute(f"SELECT {','.join(cols)} FROM users ORDER BY rowid DESC LIMIT 1")
+        row = c.fetchone()
         conn.close()
+        if not row:
+            return None
+        # map to dict
+        return dict(zip(cols, row))
+    except Exception as e:
+        print("[MESH] _fetch_user_row error:", e)
+        return None
 
+def broadcast_user_upsert_by_emp(emp_id):
+    """
+    Broadcast the upsert for the user identified by emp_id.
+    Safe: fetches the canonical DB row and sends a JSON payload to saved mesh devices.
+    """
+    try:
+        if not emp_id:
+            print("[MESH] broadcast_user_upsert_by_emp called without emp_id")
+            return False
+        user = _fetch_user_row(emp_id=emp_id)
+        if not user:
+            print(f"[MESH] no user row found for emp_id={emp_id}")
+            return False
+
+        # Build minimal payload (avoid huge binary blobs)
+        payload = {
+            "type": "user_upsert",
+            "msg_id": str(uuid.uuid4()),
+            "ts": time.time(),
+            "from": get_self_ip() if callable(get_self_ip) else None,
+            "user": {
+                "emp_id": user.get("emp_id"),
+                "emp_name": user.get("emp_name"),
+                # include face_encoding only if small/necessary; if very large prefer storing remote URL
+                "face_encoding": user.get("face_encoding"),
+                "display_image": user.get("display_image"),
+                "template_id": user.get("template_id"),
+            }
+        }
+
+        # targets = saved mesh devices (list of IPs)
+        targets = get_saved_mesh_devices()
+        if not targets:
+            # fallback: broadcast the payload
+            ok = send_reliable(payload, targets=None, port=UDP_PORT)
+            print(f"[MESH] broadcast_user_upsert_by_emp emp_id={emp_id} broadcast_ok={ok}")
+            return ok
+
+        ok = send_reliable(payload, targets=targets, port=UDP_PORT)
+        print(f"[MESH] broadcast_user_upsert_by_emp emp_id={emp_id} ok={ok} targets={targets}")
+        return ok
+    except Exception as e:
+        print("[MESH] error broadcasting user_upsert:", e)
+        return False
+
+def broadcast_user_upsert_last():
+    """
+    Convenience: broadcast most recent user (useful if handler didn't keep emp_id).
+    """
+    try:
+        user = _fetch_user_row(emp_id=None)
+        if not user:
+            print("[MESH] no recent user to broadcast")
+            return False
+        return broadcast_user_upsert_by_emp(user.get("emp_id"))
+    except Exception as e:
+        print("[MESH] broadcast_user_upsert_last error:", e)
+        return False
 
 @app.route("/api/operator_face_verify", methods=["POST"])
 def api_operator_face_verify():
@@ -3756,6 +3954,32 @@ def apply_xlsx_to_db(xlsx_file) -> dict:
     finally:
         conn.close()
     return res
+
+def get_saved_mesh_devices():
+    """
+    Return list of saved mesh device IPs from your settings table.
+    Adjust the SQL if your settings storage differs.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        c = conn.cursor()
+        # Replace this query if you store saved devices differently.
+        c.execute("SELECT value FROM settings WHERE key='saved_mesh' LIMIT 1")
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return []
+        try:
+            val = row[0]
+            if isinstance(val, (list, tuple)):
+                return list(val)
+            # if stored as JSON text
+            return json.loads(val) if isinstance(val, str) else []
+        except Exception:
+            return []
+    except Exception as e:
+        print("[MESH] get_saved_mesh_devices error:", e)
+        return []
 
 
 # ========= NEW: login logging + days-allowed policy =========
