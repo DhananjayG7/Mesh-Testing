@@ -775,34 +775,149 @@ UDP_QUEUE_THREAD.start()
 UDP_LISTENER_THREAD.start()
 
 
-def _apply_incoming_payload(obj):
+def apply_incoming_payload(obj):
+    """
+    Apply a received mesh payload to the local DB.
+    Supports:
+      - type == "user_upsert"  -> small metadata upsert (emp_id, name, template_id)
+      - type == "face_edit"    -> full face update (base64 encoding + display_image)
+    Defensive: parameterized SQL, correct column names (name not emp_name),
+    no rebroadcasting, and helpful logs.
+    """
     try:
-        t = obj.get('type')
-        if t == 'user_upsert' and isinstance(obj.get('user'), dict):
-            u = obj['user']
-            emp_id = u.get('emp_id')
-            # map user fields as used in your DB
-            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            c = conn.cursor()
-            # parameterized upsert (example, adapt columns to your schema)
-            c.execute("""
-               INSERT INTO users(emp_id, name, face_encoding, display_image)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(emp_id) DO UPDATE SET
-                 emp_name=excluded.emp_name,
-                 face_encoding=excluded.face_encoding,
-                 display_image=excluded.display_image
-            """, (
-               emp_id,
-               u.get('emp_name'),
-               u.get('face_encoding'),
-               u.get('display_image'),
-            ))
+        if not obj or not isinstance(obj, dict):
+            return False
+
+        # Basic fields
+        msg_type = obj.get("type")
+        msg_from = obj.get("from")
+        msg_id = obj.get("msg_id") or obj.get("id") or None
+
+        # avoid applying our own broadcasts (if get_self_ip is available)
+        try:
+            self_ip = get_self_ip() if callable(get_self_ip) else None
+            if self_ip and msg_from and str(msg_from) == str(self_ip):
+                # ignore messages originated by self
+                return False
+        except Exception:
+            # if get_self_ip fails, continue and process normally
+            pass
+
+        # Connect DB
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        if msg_type == "user_upsert":
+            u = obj.get("user") or {}
+            emp_id = (u.get("emp_id") or u.get("id") or "").strip()
+            if not emp_id:
+                print("[MESH] apply incoming payload error: user_upsert missing emp_id")
+                conn.close()
+                return False
+
+            # sanitize / extract fields we actually have in schema
+            name = u.get("name") or u.get("emp_name") or None
+            template_id = u.get("template_id")
+            # Build upsert that matches your schema (emp_id primary key, column name is 'name')
+            # Note: excluded.<col> is the right form for SQLite ON CONFLICT DO UPDATE
+            # Only update columns provided (avoid overwriting with None)
+            if name is not None and template_id is not None:
+                c.execute("""
+                    INSERT INTO users (emp_id, name, template_id)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(emp_id) DO UPDATE SET
+                      name = excluded.name,
+                      template_id = excluded.template_id
+                """, (emp_id, name, template_id))
+            elif name is not None:
+                c.execute("""
+                    INSERT INTO users (emp_id, name) VALUES (?, ?)
+                    ON CONFLICT(emp_id) DO UPDATE SET name = excluded.name
+                """, (emp_id, name))
+            elif template_id is not None:
+                c.execute("""
+                    INSERT INTO users (emp_id, template_id) VALUES (?, ?)
+                    ON CONFLICT(emp_id) DO UPDATE SET template_id = excluded.template_id
+                """, (emp_id, template_id))
+            else:
+                # ensure row exists
+                c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
+
             conn.commit()
             conn.close()
-            print(f"[MESH] applied user_upsert for emp_id={emp_id} from {obj.get('from')}")
-    except Exception as e:
-        print("[MESH] apply incoming payload error:", e)
+            print(f"[MESH] applied user_upsert for emp_id={emp_id} from {msg_from}")
+            return True
+
+        elif msg_type == "face_edit":
+            u = obj.get("user") or {}
+            emp_id = (u.get("emp_id") or u.get("id") or "").strip()
+            if not emp_id:
+                print("[MESH] apply incoming payload error: face_edit missing emp_id")
+                conn.close()
+                return False
+
+            # Get base64 fields (may be empty strings)
+            enc_b64 = u.get("encoding_b64") or u.get("encoding") or ""
+            disp_b64 = u.get("display_image_b64") or u.get("display_image") or ""
+
+            enc_bytes = None
+            disp_bytes = None
+            try:
+                if enc_b64:
+                    enc_bytes = base64.b64decode(enc_b64)
+            except Exception as e:
+                print("[MESH] apply incoming payload warning: failed to decode encoding_b64:", e)
+                enc_bytes = None
+
+            try:
+                if disp_b64:
+                    disp_bytes = base64.b64decode(disp_b64)
+            except Exception as e:
+                print("[MESH] apply incoming payload warning: failed to decode display_image_b64:", e)
+                disp_bytes = None
+
+            # Upsert row and update blobs present
+            # We'll ensure row exists first
+            c.execute("INSERT OR IGNORE INTO users (emp_id) VALUES (?)", (emp_id,))
+
+            updates = []
+            params = []
+            if enc_bytes is not None:
+                updates.append("face_encoding = ?")
+                params.append(enc_bytes)
+            if disp_bytes is not None:
+                updates.append("display_image = ?")
+                params.append(disp_bytes)
+            # optionally update name if provided
+            name = u.get("name")
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+
+            if updates:
+                params.append(emp_id)
+                sql = f"UPDATE users SET {', '.join(updates)} WHERE emp_id = ?"
+                c.execute(sql, tuple(params))
+
+            conn.commit()
+            conn.close()
+            print(f"[MESH] applied face_edit for emp_id={emp_id} from {msg_from}")
+            return True
+
+        else:
+            # Unknown payload type - ignore but log
+            conn.close()
+            print("[MESH] apply incoming payload: unknown type", msg_type)
+            return False
+
+    except Exception as exc:
+        # catch-all logging for debugging
+        try:
+            conn.close()
+        except Exception:
+            pass
+        print("[MESH] apply incoming payload error:", exc)
+        return False
 
 # start background threads
 try:
