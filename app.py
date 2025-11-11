@@ -786,7 +786,7 @@ def _apply_incoming_payload(obj):
             c = conn.cursor()
             # parameterized upsert (example, adapt columns to your schema)
             c.execute("""
-               INSERT INTO users(emp_id, emp_name, face_encoding, display_image)
+               INSERT INTO users(emp_id, name, face_encoding, display_image)
                VALUES (?, ?, ?, ?)
                ON CONFLICT(emp_id) DO UPDATE SET
                  emp_name=excluded.emp_name,
