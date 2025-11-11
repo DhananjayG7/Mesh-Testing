@@ -915,17 +915,19 @@ def api_udp_status():
     return jsonify({"devices": devices, "udp_queue_count": qcount})
 
 
-@app.route("/api/discover_now", methods=["POST", "GET"])
+@app.route('/api/discover_now', methods=['GET','POST'])
 def api_discover_now():
-    # broadcast a discover message
+    # existing behavior: broadcast discovery
     payload = {"type": "discover", "from": get_self_ip(), "info": {"name": os.uname().nodename}}
     try:
         send_udp_json(BROADCAST_ADDR, UDP_PORT, payload, use_broadcast=True)
-    except Exception as e:
-        print("[API] discover send error:", e)
-        # queue for reliability
+    except Exception:
         queue_udp_message(BROADCAST_ADDR, UDP_PORT, payload)
-    return jsonify({"success": True})
+    # return the current known devices (so client gets immediate state)
+    with KNOWN_DEVICES_LOCK:
+        devices = {k: v for k, v in KNOWN_DEVICES.items()}
+    return jsonify({"success": True, "devices": devices})
+
 
 @app.route("/api/save_mesh_devices", methods=["POST"])
 def api_save_mesh_devices():
