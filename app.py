@@ -548,7 +548,13 @@ def _make_listen_socket():
     s.settimeout(1.0)
     return s
 
-
+def _row_to_dict(cursor, row):
+    """Convert sqlite row (tuple) to dict using cursor.description"""
+    if row is None:
+        return None
+    desc = [col[0] for col in (cursor.description or [])]
+    return {k: row[i] for i, k in enumerate(desc)}
+    
 # ----------------------------
 # Mesh selection helpers
 # ----------------------------
@@ -2086,59 +2092,53 @@ def face_register():
 # helper to broadcast face_edit specifically (sends encoding+image)
 def broadcast_face_edit(emp_id):
     """
-    Fetch user's encoding and display image from DB and send as type 'face_edit'.
-    Uses send_reliable() to attempt immediate send and queue on failure.
+    Fetch user's encoding and display image (BLOBs) and send as type 'face_edit'.
+    Encodes binary to base64 for transport. If payload is too large, consider changing
+    receivers to fetch via HTTP instead.
+    Returns True if send_reliable returned truthy, False otherwise.
     """
     try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT face_encoding, display_image, name FROM users WHERE emp_id=?", (emp_id,))
-        row = c.fetchone()
-        conn.close()
+        if not emp_id:
+            print("[MESH] broadcast_face_edit called without emp_id")
+            return False
 
+        row = _fetch_user_row(emp_id=emp_id)
         if not row:
             print(f"[MESH] broadcast_face_edit: no user row for emp_id={emp_id}")
             return False
 
-        # row could be a sqlite3.Row or tuple depending on get_db_connection; normalize:
-        if isinstance(row, dict):
-            enc_bytes = row.get("face_encoding")
-            disp = row.get("display_image")
-            name = row.get("name")
-        else:
-            # assume tuple in order: face_encoding, display_image, name
-            enc_bytes = row[0]
-            disp = row[1]
-            name = row[2] if len(row) > 2 else None
+        enc_bytes = row.get("face_encoding") if row else None
+        disp_bytes = row.get("display_image") if row else None
+        name = row.get("name") if row else ""
 
-        # encode to base64 for transfer (safe, but can be large)
         enc_b64 = base64.b64encode(enc_bytes).decode() if enc_bytes else ""
-        disp_b64 = base64.b64encode(disp).decode() if disp else ""
+        disp_b64 = base64.b64encode(disp_bytes).decode() if disp_bytes else ""
 
         payload = {
             "type": "face_edit",
             "msg_id": str(uuid.uuid4()),
             "ts": time.time(),
-            "from": get_self_ip() if callable(get_self_ip) else None,
+            "from": (get_self_ip() if callable(get_self_ip) else None),
             "user": {
                 "emp_id": emp_id,
                 "name": name or "",
                 "encoding_b64": enc_b64,
-                "display_image_b64": disp_b64,
+                "display_image_b64": disp_b64
             }
         }
 
-        # send to saved mesh devices or broadcast
-        saved = get_saved_mesh_devices()
-        if saved:
-            return send_reliable(payload, targets=saved, port=UDP_PORT)
-        else:
-            return send_reliable(payload, targets=None, port=UDP_PORT)
+        targets = get_saved_mesh_devices()
+        if targets:
+            ok = send_reliable(payload, targets=targets, port=UDP_PORT)
+            print(f"[MESH] broadcast_face_edit emp_id={emp_id} ok={ok} targets={targets}")
+            return bool(ok)
+
+        ok = send_reliable(payload, targets=None, port=UDP_PORT)
+        print(f"[MESH] broadcast_face_edit emp_id={emp_id} broadcast_ok={ok}")
+        return bool(ok)
     except Exception as e:
         print("[MESH] broadcast_face_edit error:", e)
         return False
-
-
 @app.route("/api/face_edit", methods=["POST"])
 def face_edit():
     data = request.json or {}
@@ -3357,75 +3357,78 @@ def _is_operator_role(role: str | None) -> bool:
 
 def _fetch_user_row(emp_id=None):
     """
-    Fetch user row from users table and return a clean dict with safe keys.
-    If emp_id is None, return the most-recently inserted user as a fallback.
-    Adjust column names to match your users table.
+    Fetch user row from users table and return a dict.
+    If emp_id is None, returns the most recently inserted user.
+    Uses column names from your schema: emp_id, name, display_image, face_encoding, template_id.
     """
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        conn = get_db_connection()
         c = conn.cursor()
-        # change columns to match your users table exactly
-        cols = ["emp_id", "emp_name", "face_encoding", "display_image", "template_id"]
+        cols = ["emp_id", "name", "display_image", "face_encoding", "template_id"]
         if emp_id:
-            c.execute(f"SELECT {','.join(cols)} FROM users WHERE emp_id = ? LIMIT 1", (emp_id,))
+            q = f"SELECT {', '.join(cols)} FROM users WHERE emp_id = ? LIMIT 1"
+            c.execute(q, (emp_id,))
         else:
-            # fallback to last inserted row
-            c.execute(f"SELECT {','.join(cols)} FROM users ORDER BY rowid DESC LIMIT 1")
+            q = f"SELECT {', '.join(cols)} FROM users ORDER BY rowid DESC LIMIT 1"
+            c.execute(q)
         row = c.fetchone()
+        row_dict = _row_to_dict(c, row)
         conn.close()
-        if not row:
-            return None
-        # map to dict
-        return dict(zip(cols, row))
+        return row_dict
     except Exception as e:
+        # Keep error informative for logs
         print("[MESH] _fetch_user_row error:", e)
+        try:
+            conn.close()
+        except Exception:
+            pass
         return None
-
+        
+        
 def broadcast_user_upsert_by_emp(emp_id):
     """
     Broadcast the upsert for the user identified by emp_id.
-    Safe: fetches the canonical DB row and sends a JSON payload to saved mesh devices.
+    Reads canonical DB row, constructs a minimal payload, and calls send_reliable().
+    Returns True if send_reliable returned truthy, False otherwise.
     """
     try:
         if not emp_id:
             print("[MESH] broadcast_user_upsert_by_emp called without emp_id")
             return False
+
         user = _fetch_user_row(emp_id=emp_id)
         if not user:
             print(f"[MESH] no user row found for emp_id={emp_id}")
             return False
 
-        # Build minimal payload (avoid huge binary blobs)
+        # Build minimal payload to avoid huge UDP packets
         payload = {
             "type": "user_upsert",
             "msg_id": str(uuid.uuid4()),
             "ts": time.time(),
-            "from": get_self_ip() if callable(get_self_ip) else None,
+            "from": (get_self_ip() if callable(get_self_ip) else None),
             "user": {
                 "emp_id": user.get("emp_id"),
-                "emp_name": user.get("emp_name"),
-                # include face_encoding only if small/necessary; if very large prefer storing remote URL
-                "face_encoding": user.get("face_encoding"),
-                "display_image": user.get("display_image"),
+                "name": user.get("name"),
                 "template_id": user.get("template_id"),
+                # do NOT include large blob fields here (face_encoding/display_image)
+                # receivers can request full data via HTTP endpoint if needed.
             }
         }
 
-        # targets = saved mesh devices (list of IPs)
         targets = get_saved_mesh_devices()
         if not targets:
-            # fallback: broadcast the payload
+            # broadcast
             ok = send_reliable(payload, targets=None, port=UDP_PORT)
             print(f"[MESH] broadcast_user_upsert_by_emp emp_id={emp_id} broadcast_ok={ok}")
-            return ok
+            return bool(ok)
 
         ok = send_reliable(payload, targets=targets, port=UDP_PORT)
         print(f"[MESH] broadcast_user_upsert_by_emp emp_id={emp_id} ok={ok} targets={targets}")
-        return ok
+        return bool(ok)
     except Exception as e:
         print("[MESH] error broadcasting user_upsert:", e)
         return False
-
 def broadcast_user_upsert_last():
     """
     Convenience: broadcast most recent user (useful if handler didn't keep emp_id).
@@ -3957,30 +3960,37 @@ def apply_xlsx_to_db(xlsx_file) -> dict:
 
 def get_saved_mesh_devices():
     """
-    Return list of saved mesh device IPs from your settings table.
-    Adjust the SQL if your settings storage differs.
+    Read saved mesh devices from app_settings.key = 'saved_mesh'.
+    The value is expected to be JSON array (e.g. '["192.168.1.12","192.168.1.13"]').
+    If not present, returns [].
     """
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5, check_same_thread=False)
+        conn = get_db_connection()
         c = conn.cursor()
-        # Replace this query if you store saved devices differently.
-        c.execute("SELECT value FROM settings WHERE key='saved_mesh' LIMIT 1")
+        c.execute("SELECT value FROM app_settings WHERE key = ? LIMIT 1", ("saved_mesh",))
         row = c.fetchone()
         conn.close()
         if not row:
             return []
-        try:
-            val = row[0]
-            if isinstance(val, (list, tuple)):
-                return list(val)
-            # if stored as JSON text
-            return json.loads(val) if isinstance(val, str) else []
-        except Exception:
-            return []
+        val = row[0] if isinstance(row, (list, tuple)) else row
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    return parsed
+            except Exception:
+                # older storage might be comma-separated
+                return [ip.strip() for ip in val.split(",") if ip.strip()]
+        if isinstance(val, list):
+            return val
+        return []
     except Exception as e:
         print("[MESH] get_saved_mesh_devices error:", e)
+        try:
+            conn.close()
+        except Exception:
+            pass
         return []
-
 
 # ========= NEW: login logging + days-allowed policy =========
 def insert_login_log(emp_id: str, name: str, mode: str):
