@@ -473,38 +473,47 @@ _ACKED_MSGS_LOCK = threading.Lock()
 UDP_QUEUE_TABLE = "udp_queue"
 
 def ensure_udp_queue_table():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    c = conn.cursor()
-    try:
-        c.execute(f"""
-        CREATE TABLE IF NOT EXISTS {UDP_QUEUE_TABLE} (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            target_ip TEXT NOT NULL,
-            target_port INTEGER NOT NULL,
-            payload TEXT NOT NULL,
-            retries INTEGER DEFAULT 0,
-            last_sent REAL DEFAULT 0
-        )
-        """)
-        conn.commit()
-    except Exception as e:
-        print("[UDP] ensure table error:", e)
-    finally:
-        conn.close()
-
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         c = conn.cursor()
+        # create table with the full/canonical schema (id primary, target_ip, target_port, payload, retries, last_sent)
         c.execute(f"""
         CREATE TABLE IF NOT EXISTS {UDP_QUEUE_TABLE} (
             id TEXT PRIMARY KEY,
             target_ip TEXT,
+            target_port INTEGER DEFAULT {UDP_PORT},
             payload TEXT,
             retries INTEGER DEFAULT 0,
             last_sent REAL DEFAULT 0
         )
         """)
         conn.commit()
+        # defensive migration: add missing columns if older DB lacks them
+        cols = [r[1] for r in c.execute(f"PRAGMA table_info({UDP_QUEUE_TABLE})").fetchall()]
+        if "target_port" not in cols:
+            try:
+                c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN target_port INTEGER DEFAULT {UDP_PORT}")
+                conn.commit()
+            except Exception:
+                pass
+        if "payload" not in cols:
+            try:
+                c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN payload TEXT DEFAULT ''")
+                conn.commit()
+            except Exception:
+                pass
+        if "retries" not in cols:
+            try:
+                c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN retries INTEGER DEFAULT 0")
+                conn.commit()
+            except Exception:
+                pass
+        if "last_sent" not in cols:
+            try:
+                c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN last_sent REAL DEFAULT 0")
+                conn.commit()
+            except Exception:
+                pass
         conn.close()
     except Exception as e:
         print("[UDP] ensure table error:", e)
@@ -616,78 +625,107 @@ def send_reliable(payload: dict, targets=None, max_retries=5, retry_interval=1.0
             msg_ids.append(msg_id)
     return msg_ids[0] if len(msg_ids)==1 else msg_ids
 
-def _udp_queue_worker(stop_event: Event):
-    """Background worker that drains the queue and retries sending."""
-    ensure_udp_queue_table()
-    while not stop_event.is_set():
+def _udp_queue_worker(stop_event=None):
+    """Background worker that reads pending queue and sends, handles ACKs and retries."""
+    send_sock = _make_send_socket()
+    while True if stop_event is None else (not stop_event.is_set()):
         try:
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             c = conn.cursor()
-            c.execute(f"SELECT id,target_ip,target_port,payload,retries FROM {UDP_QUEUE_TABLE} ORDER BY id LIMIT 20")
-            rows = c.fetchall()
-            for r in rows:
-                ident, ip, port, payload_text, retries = r
-                payload = json.loads(payload_text)
-                ok = send_udp_json(ip, port, payload)
-                if ok:
-                    c.execute(f"DELETE FROM {UDP_QUEUE_TABLE} WHERE id = ?", (ident,))
-                else:
-                    c.execute(f"UPDATE {UDP_QUEUE_TABLE} SET retries = retries + 1, last_sent = ? WHERE id = ?",
-                              (time.time(), ident))
-            conn.commit()
+            rows = c.execute(f"SELECT id, target_ip, payload, retries, last_sent FROM {UDP_QUEUE_TABLE} ORDER BY last_sent ASC LIMIT 50").fetchall()
             conn.close()
+            now = time.time()
+            for row in rows:
+                msg_id, target_ip, payload_json, retries, last_sent = row
+                if now - (last_sent or 0) < (1.0 + (retries or 0)*0.5):
+                    continue
+                if (retries or 0) >= 20:
+                    print(f"[UDP] dropping msg {msg_id} after {retries} retries")
+                    _delete_queue_item(msg_id)
+                    continue
+                try:
+                    addr = target_ip or BROADCAST_ADDR
+                    send_sock.sendto((payload_json or "").encode('utf-8'), (addr, UDP_PORT))
+                except Exception:
+                    pass
+                try:
+                    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    c = conn.cursor()
+                    c.execute(f"UPDATE {UDP_QUEUE_TABLE} SET retries=coalesce(retries,0)+1, last_sent=? WHERE id=?", (time.time(), msg_id))
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                time.sleep(0.02)
+            # purge acknowledged messages
+            with _ACKED_MSGS_LOCK:
+                acked = list(_ACKED_MSGS)
+            for ack_id in acked:
+                _delete_queue_item(ack_id)
+                with _ACKED_MSGS_LOCK:
+                    if ack_id in _ACKED_MSGS:
+                        _ACKED_MSGS.remove(ack_id)
+            # wait briefly, but allow stop_event to short-circuit
+            if stop_event is None:
+                time.sleep(0.8)
+            else:
+                stop_event.wait(0.8)
         except Exception as e:
-            print("[UDP] queue worker error:", e)
-        # small sleep
-        stop_event.wait(1.0)
-
-
-def _udp_listener_worker(stop_event: Event):
-    """Listens to UDP port for discovery/acks from other devices."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            print("[UDP queue worker] error:", e)
+            if stop_event is None:
+                time.sleep(1.0)
+            else:
+                stop_event.wait(1.0)
+    # clean-up socket
     try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        send_sock.close()
     except Exception:
         pass
-    s.bind(("", UDP_PORT))
-    s.settimeout(1.0)
-    while not stop_event.is_set():
+
+
+def _udp_listener_worker(stop_event=None):
+    """Background listener: accept messages, update KNOWN_DEVICES, send ACKs, and dispatch payloads."""
+    s = _make_listen_socket()
+    while True if stop_event is None else (not stop_event.is_set()):
         try:
-            data, addr = s.recvfrom(65536)
-            ip, port = addr[0], addr[1]
+            data, addr = s.recvfrom(131072)
+            ip = addr[0]
+            now = time.time()
             try:
-                payload = json.loads(data.decode("utf-8"))
+                obj = json.loads(data.decode('utf-8', 'ignore'))
             except Exception:
-                payload = None
-            # handle discovery message types
-            if payload and isinstance(payload, dict):
-                typ = payload.get("type")
-                if typ == "discover":
-                    # reply with a discovery-ack
-                    with KNOWN_DEVICES_LOCK:
-                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
-                    # send back ack
-                    resp = {"type": "discover_ack", "from": get_self_ip(), "info": payload.get("info")}
-                    try:
-                        send_udp_json(ip, UDP_PORT, resp)
-                    except Exception as e:
-                        print("[UDP] send ack error:", e)
-                elif typ == "discover_ack":
-                    with KNOWN_DEVICES_LOCK:
-                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
-                else:
-                    # application-level payload (sync/register/edit/delete)
-                    # you should handle these payload types in your app's message handler
-                    handle_incoming_mesh_payload(payload, ip)
+                continue
+            with KNOWN_DEVICES_LOCK:
+                KNOWN_DEVICES[ip] = {"ip": ip, "last_seen": now, "info": obj.get("info")}
+            if obj.get("type") == "udp_ack" and obj.get("ack_id"):
+                ack_id = obj.get("ack_id")
+                with _ACKED_MSGS_LOCK:
+                    _ACKED_MSGS.add(ack_id)
+                continue
+            try:
+                ack = {"type": "udp_ack", "ack_id": obj.get("_msg_id"), "from": get_self_ip()}
+                s.sendto(json.dumps(ack, separators=(',', ':')).encode('utf-8'), (ip, UDP_PORT))
+            except Exception:
+                pass
+            if obj.get("_from") == get_self_ip():
+                continue
+            try:
+                threading.Thread(target=_apply_incoming_payload, args=(obj,), daemon=True).start()
+            except Exception:
+                pass
         except socket.timeout:
             continue
         except Exception as e:
-            print("[UDP] listener error:", e)
+            print("[UDP listener] error:", e)
+            if stop_event is None:
+                time.sleep(0.5)
+            else:
+                stop_event.wait(0.5)
     try:
         s.close()
     except Exception:
         pass
-        
+       
 def handle_incoming_mesh_payload(payload: dict, ip: str):
     # Implement your application logic: e.g., if payload['type']=='user_upsert', apply to local DB
     try:
@@ -787,18 +825,47 @@ def load_mesh_state():
     with KNOWN_DEVICES_LOCK:
         return {ip: {"ip": info["ip"], "last_seen": info["last_seen"], "info": info.get("info")} for ip, info in KNOWN_DEVICES.items()}
 
-def send_udp_json(ip, port, payload, use_broadcast=False):
-    """Send JSON payload via UDP. Returns True on success."""
+def send_udp_json(target_ip, port, payload, use_broadcast: bool = False):
+    """
+    Canonical UDP send helper (backwards-compatible).
+    - target_ip: destination IP or broadcast address string. If None/empty, behavior falls back to broadcast.
+    - port: destination UDP port (int).
+    - payload: JSON-serializable object (dict/list/...).
+    - use_broadcast: when True sets SO_BROADCAST on socket (use for 255.255.255.255 or subnet .255).
+    Returns True if send succeeded, False on exception.
+    Notes:
+      - This function does a best-effort immediate send. If it returns False, callers should call
+        queue_udp_message(target_ip, port, payload) to persist for retries.
+    """
     try:
-        s = _make_send_socket()
         data = json.dumps(payload).encode("utf-8")
-        addr = (ip, int(port))
-        s.sendto(data, addr)
+
+        # choose socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2.0)
+        if use_broadcast:
+            try:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            except Exception:
+                pass
+
+        # default fallback: if no target provided, broadcast to BROADCAST_ADDR
+        if not target_ip:
+            target_ip = BROADCAST_ADDR
+
+        s.sendto(data, (str(target_ip), int(port)))
         s.close()
-        # persist to queue only if needed (we try immediate send; queue logic handles retries)
         return True
     except Exception as e:
-        print(f"[UDP] send error to {ip}:{port} ->", e)
+        # prefer app logger if available
+        try:
+            current_app.logger.debug(f"[send_udp_json] error sending to {target_ip}:{port} -> {e}")
+        except Exception:
+            print(f"[send_udp_json] error sending to {target_ip}:{port} -> {e}")
+        try:
+            s.close()
+        except Exception:
+            pass
         return False
 
 def queue_udp_message(ip, port, payload):
@@ -1725,15 +1792,8 @@ def serve_user_image(filename):
 def load_mesh_state():
     """Mesh removed — return empty state so callers behave normally."""
     return {}
-
-def send_udp_json(ip, port, payload):
-    """Mesh removed — log and ignore."""
-    try:
-        print(f"[NET-UDP-STUB] Would send to {ip}:{port} payload keys: {list(payload.keys())}")
-    except Exception:
-        pass
-    return False
-
+    
+    
 def broadcast_tcp(payload):
     """Mesh removed — log and ignore."""
     try:
