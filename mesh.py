@@ -1,330 +1,357 @@
-import base64
+# mesh.py
+# Mesh / UDP discovery + reliable queue module
+# Save as mesh.py and import into your app.py
+
+import os
 import json
+import sqlite3
 import socket
 import threading
-import sqlite3
-import platform
-from datetime import datetime
-from flask import Blueprint, render_template, request, jsonify
-import os
 import time
+from threading import Event, Lock
+from flask import Blueprint, jsonify, current_app
 
-mesh_bp = Blueprint('mesh', __name__)
-BROADCAST_PORT = 5005
-ENCODING_PORT = 5006
-MESH_STATE_FILE = "mesh_state.json"
-DB_PATH = "users.db"
-FINGER_DB_PATH = "fingerprints.db"
-DEVICE_TIMEOUT = 20  # seconds before removing a device
+# Configuration (can be overridden by environment variables)
+DB_PATH = os.environ.get("APP_DB_PATH", "ethos.db")
+UDP_PORT = int(os.environ.get("UDP_PORT", "5006"))
+BROADCAST_ADDR = os.environ.get("BROADCAST_ADDR", "255.255.255.255")
+# If your network blocks 255.255.255.255 use e.g. "192.168.1.255"
 
-# ---- Device Discovery (live, in-memory only) ----
-known_devices = {}
-known_devices_lock = threading.Lock()
+mesh_bp = Blueprint("mesh", __name__)
 
-def get_self_ip():
-    try:
-        ip = socket.gethostbyname(socket.gethostname())
-        if ip.startswith("127."):
-            ip = os.popen("hostname -I").read().split()[0]
-        return ip.strip()
-    except: return "127.0.0.1"
+# In-memory known devices
+KNOWN_DEVICES = {}
+KNOWN_DEVICES_LOCK = Lock()
 
-def load_mesh_state():
-    if os.path.exists(MESH_STATE_FILE):
-        with open(MESH_STATE_FILE) as f:
-            return json.load(f)
-    return {}
+UDP_QUEUE_TABLE = "udp_queue"
 
-def save_mesh_state(state):
-    with open(MESH_STATE_FILE, "w") as f:
-        json.dump(state, f)
+# Worker control
+_UDP_STOP_EVENT = None
+_UDP_QUEUE_THREAD = None
+_UDP_LISTENER_THREAD = None
 
-def get_current_mesh_devices():
-    now = time.time()
-    with known_devices_lock:
-        # Only show devices that have broadcasted in the last DEVICE_TIMEOUT seconds
-        return [
-            v for v in known_devices.values()
-            if now - v.get("timestamp", 0) < DEVICE_TIMEOUT
-        ]
 
-def cleanup_known_devices():
-    now = time.time()
-    with known_devices_lock:
-        for k in list(known_devices.keys()):
-            if now - known_devices[k].get("timestamp", 0) > DEVICE_TIMEOUT:
-                del known_devices[k]
-
-def send_to_all_mesh(payload):
-    # Always send to currently active devices except self
-    my_ip = get_self_ip()
-    for dev in get_current_mesh_devices():
-        ip = dev.get("ip")
-        if ip and ip != my_ip:
-            send_udp_json(ip, ENCODING_PORT, payload)
-
-# ----------- Flask Routes -----------
-
-@mesh_bp.route("/device_comm")
-def mesh_ui():
-    return render_template("device_comm.html")
-
-@mesh_bp.route("/api/mesh_devices")
-def mesh_devices():
-    cleanup_known_devices()
-    devices = get_current_mesh_devices()
-    return jsonify(devices={d['device']: d for d in devices})
-
-@mesh_bp.route("/api/mesh_status")
-def mesh_status():
-    state = load_mesh_state()
-    self_ip = get_self_ip()
-    is_root = state.get("is_root", False)
-    connected = bool(state.get("devices"))
-    root_ip = state.get("root_ip", None)
-    devices = state.get("devices", [])
-    return jsonify({
-        "is_root": is_root,
-        "connected": connected,
-        "root_ip": root_ip,
-        "devices": devices,
-        "self_ip": self_ip,
-    })
-
-@mesh_bp.route('/api/create_mesh', methods=['POST'])
-def api_create_mesh():
-    data = request.json
-    ips = data.get("ips", [])
-    self_ip = get_self_ip()
-    # Pull device names from known_devices
-    with known_devices_lock:
-        device_map = {d['ip']: d for d in known_devices.values()}
-    devices = []
-    for ip in ips:
-        dev = device_map.get(ip)
-        dev_name = dev['device'] if dev else ip
-        devices.append({"ip": ip, "device": dev_name})
-    # Add self
-    self_name = socket.gethostname()
-    devices.append({"ip": self_ip, "device": self_name})
-
-    mesh_state = {
-        "root_ip": self_ip,
-        "is_root": True,
-        "devices": devices
-    }
-    save_mesh_state(mesh_state)
-    # Propagate mesh to all members (UDP unicast)
-    payload = {
-        "type": "mesh_update",
-        "mesh_state": mesh_state
-    }
-    send_to_all_mesh(payload)
-    return jsonify({"success": True, "message": "Mesh created/updated!"})
-
-@mesh_bp.route("/api/send_face_encoding", methods=["POST"])
-def api_send_face_encoding():
-    data = request.json
-    emp_id = data.get("emp_id")
-    # Use all currently active devices!
-    current_mesh_devices = get_current_mesh_devices()
-    ips = [d["ip"] for d in current_mesh_devices if "ip" in d]
-    if not emp_id or not ips:
-        return jsonify(success=False, message="Missing emp_id or devices")
-    conn = sqlite3.connect(DB_PATH)
+# -------------------------
+# DB migration / utilities
+# -------------------------
+def _ensure_udp_table_and_columns():
+    """
+    Ensure the udp_queue table exists and contains the columns we need.
+    If the table exists but lacks columns (older schema), add them via ALTER TABLE ADD COLUMN.
+    """
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
-    c.execute("SELECT face_encoding, name, display_image FROM users WHERE emp_id=?", (emp_id,))
-    row = c.fetchone()
+    # create table if not exists with full schema
+    c.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {UDP_QUEUE_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_ip TEXT NOT NULL,
+            target_port INTEGER NOT NULL DEFAULT {UDP_PORT},
+            payload TEXT NOT NULL,
+            retries INTEGER DEFAULT 0,
+            last_sent REAL DEFAULT 0
+        )
+        """
+    )
+    conn.commit()
+
+    # Check actual columns in table
+    c.execute(f"PRAGMA table_info({UDP_QUEUE_TABLE})")
+    cols = [r[1] for r in c.fetchall()]
+    # Add missing columns if any
+    if "target_port" not in cols:
+        try:
+            c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN target_port INTEGER DEFAULT {UDP_PORT}")
+            conn.commit()
+        except Exception:
+            pass
+    if "payload" not in cols:
+        try:
+            c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN payload TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            pass
+    if "retries" not in cols:
+        try:
+            c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN retries INTEGER DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass
+    if "last_sent" not in cols:
+        try:
+            c.execute(f"ALTER TABLE {UDP_QUEUE_TABLE} ADD COLUMN last_sent REAL DEFAULT 0")
+            conn.commit()
+        except Exception:
+            pass
+
     conn.close()
-    if not row:
-        return jsonify(success=False, message="User not found")
-    encoding, name, display_image = row
-    payload = {
-        "type": "face_sync",
-        "emp_id": emp_id,
-        "name": name,
-        "registered_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "encoding": base64.b64encode(encoding).decode(),
-        "display_image": base64.b64encode(display_image).decode() if display_image else None
-    }
-    failed = []
-    for ip in ips:
+
+
+# -------------------------
+# Network helpers
+# -------------------------
+def get_self_ip():
+    """Best-effort LAN IP (does not make network changes)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _make_send_socket(timeout=2.0, use_broadcast=False):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if use_broadcast:
         try:
-            send_udp_json(ip, ENCODING_PORT, payload)
-        except Exception as e:
-            print(f"[Mesh] Failed to send to {ip}:", e)
-            failed.append(ip)
-    success = not failed
-    msg = "Sent successfully." if success else f"Failed for: {', '.join(failed)}"
-    return jsonify(success=success, message=msg)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        except Exception:
+            pass
+    s.settimeout(timeout)
+    return s
 
-# ========== UDP Networking & Receivers ==========
 
-def send_udp_json(ip, port, payload):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.sendto(json.dumps(payload).encode(), (ip, port))
-    sock.close()
-
-def receive_mesh_broadcast():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.bind(('', BROADCAST_PORT))
-    while True:
+def send_udp_json(ip, port, payload, use_broadcast=False):
+    """
+    Sends JSON payload via UDP to ip:port.
+    Returns True on success, False on exception (caller can queue).
+    """
+    try:
+        s = _make_send_socket(use_broadcast=use_broadcast)
+        data = json.dumps(payload).encode("utf-8")
+        s.sendto(data, (ip, int(port)))
+        s.close()
+        return True
+    except Exception as e:
+        # Log to app logger if available
         try:
-            data, addr = sock.recvfrom(1024)
-            msg = json.loads(data.decode())
-            if msg.get("device") and msg.get("ip"):
-                with known_devices_lock:
-                    # Always update!
-                    known_devices[msg["device"]] = msg
-            # Clean up old devices regularly
-            cleanup_known_devices()
-        except Exception as e:
-            print(f"[Mesh] Broadcast receive error: {e}")
+            current_app.logger.debug(f"[mesh][send_udp_json] send error to {ip}:{port} -> {e}")
+        except Exception:
+            print(f"[mesh][send_udp_json] send error to {ip}:{port} -> {e}")
+        return False
 
-def receive_mesh_udp():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('', ENCODING_PORT))
-    while True:
+
+def queue_udp_message(ip, port, payload):
+    """
+    Persist a message to the sqlite queue table for later retries.
+    This is robust to older schema (migration ran at module init).
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        # Ensure table and columns exist
+        _ensure_udp_table_and_columns()
+        c.execute(
+            f"INSERT INTO {UDP_QUEUE_TABLE} (target_ip, target_port, payload) VALUES (?, ?, ?)",
+            (ip, int(port), json.dumps(payload)),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
         try:
-            data, addr = sock.recvfrom(16384)
-            msg = json.loads(data.decode())
-            # Mesh topology update
-            if msg.get("type") == "mesh_update":
-                mesh_state = msg["mesh_state"]
-                self_ip = get_self_ip()
-                if any(d["ip"] == self_ip for d in mesh_state.get("devices", [])):
-                    mesh_state["is_root"] = (mesh_state.get("root_ip") == self_ip)
-                    save_mesh_state(mesh_state)
-                    print("[Mesh] Mesh state updated from root.")
-            # ---- FACE SYNC ----
-            elif msg.get("type") == "face_sync":
-                emp_id = msg["emp_id"]
-                name = msg.get("name")
-                enc_bytes = base64.b64decode(msg["encoding"])
-                display_image = base64.b64decode(msg["display_image"]) if msg.get("display_image") else None
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                if display_image:
-                    c.execute("INSERT OR REPLACE INTO users (emp_id, name, face_encoding, display_image) VALUES (?, ?, ?, ?)",
-                              (emp_id, name, enc_bytes, display_image))
+            current_app.logger.error(f"[mesh][queue_udp_message] queue insert error: {e}")
+        except Exception:
+            print(f"[mesh][queue_udp_message] queue insert error: {e}")
+        return False
+
+
+# -------------------------
+# Background workers
+# -------------------------
+def _udp_queue_worker(stop_event: Event):
+    """
+    Drains the queue and retries sends.
+    This worker fetches pending rows and tries to send them. On success deletes the row.
+    """
+    _ensure_udp_table_and_columns()
+    while not stop_event.is_set():
+        try:
+            conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+            c = conn.cursor()
+            # fetch a small batch
+            c.execute(f"SELECT id,target_ip,target_port,payload,retries FROM {UDP_QUEUE_TABLE} ORDER BY id LIMIT 20")
+            rows = c.fetchall()
+            for ident, ip, port, payload_text, retries in rows:
+                try:
+                    payload = json.loads(payload_text)
+                except Exception:
+                    payload = None
+                ok = False
+                # try sending; use broadcast flag if the target ip looks like a broadcast address
+                use_broadcast = ip.endswith(".255") or ip == "255.255.255.255"
+                if payload is not None:
+                    ok = send_udp_json(ip, port, payload, use_broadcast=use_broadcast)
+                if ok:
+                    c.execute(f"DELETE FROM {UDP_QUEUE_TABLE} WHERE id = ?", (ident,))
                 else:
-                    c.execute("INSERT OR REPLACE INTO users (emp_id, name, face_encoding) VALUES (?, ?, ?)",
-                              (emp_id, name, enc_bytes))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Synced face encoding for {emp_id}")
-            elif msg.get("type") == "face_delete":
-                emp_id = msg["emp_id"]
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("DELETE FROM users WHERE emp_id=?", (emp_id,))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Face deleted for {emp_id}")
-            elif msg.get("type") == "face_edit":
-                emp_id = msg["emp_id"]
-                name = msg.get("name")
-                encoding_bytes = base64.b64decode(msg["encoding"])
-                display_image = base64.b64decode(msg["display_image"]) if msg.get("display_image") else None
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                if display_image:
-                    c.execute("UPDATE users SET face_encoding=?, name=?, display_image=? WHERE emp_id=?", (encoding_bytes, name, display_image, emp_id))
-                else:
-                    c.execute("UPDATE users SET face_encoding=?, name=? WHERE emp_id=?", (encoding_bytes, name, emp_id))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Face updated for {emp_id}")
-            # ---- FINGERPRINT SYNC ----
-            elif msg.get("type") == "finger_register":
-                user_id = int(msg["user_id"])
-                username = msg.get("username", "")
-                tpl = base64.b64decode(msg["template"])
-                db = sqlite3.connect(FINGER_DB_PATH)
-                db.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
-                    id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    template BLOB NOT NULL
-                )''')
-                db.execute("INSERT OR REPLACE INTO fingerprints (id, username, template) VALUES (?, ?, ?)", (user_id, username, tpl))
-                db.commit()
-                db.close()
-                print(f"[Mesh] Synced fingerprint for {user_id}")
-            elif msg.get("type") == "finger_edit":
-                user_id = int(msg["user_id"])
-                username = msg.get("username", "")
-                tpl = base64.b64decode(msg["template"])
-                db = sqlite3.connect(FINGER_DB_PATH)
-                db.execute("UPDATE fingerprints SET username=?, template=? WHERE id=?", (username, tpl, user_id))
-                db.commit()
-                db.close()
-                print(f"[Mesh] Fingerprint edited for {user_id}")
-            elif msg.get("type") == "finger_delete":
-                user_id = int(msg["user_id"])
-                db = sqlite3.connect(FINGER_DB_PATH)
-                db.execute("DELETE FROM fingerprints WHERE id=?", (user_id,))
-                db.commit()
-                db.close()
-                print(f"[Mesh] Fingerprint deleted for {user_id}")
-            # ---- RFID SYNC ----
-            elif msg.get("type") == "rfid_register":
-                employee_id = msg["employee_id"]
-                name = msg.get("name")
-                rfid_cards = msg.get("rfid_cards", [])
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("INSERT OR IGNORE INTO users (emp_id, name) VALUES (?, ?)", (employee_id, name))
-                c.execute("UPDATE users SET name=?, rfid_cards=? WHERE emp_id=?", (name, json.dumps(rfid_cards), employee_id))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Synced RFID register for {employee_id}")
-            elif msg.get("type") == "rfid_edit":
-                employee_id = msg["employee_id"]
-                name = msg.get("name")
-                rfid_cards = msg.get("rfid_cards", [])
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE users SET name=?, rfid_cards=? WHERE emp_id=?", (name, json.dumps(rfid_cards), employee_id))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Synced RFID edit for {employee_id}")
-            elif msg.get("type") == "rfid_delete":
-                employee_id = msg["employee_id"]
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("UPDATE users SET rfid_cards=? WHERE emp_id=?", (json.dumps([]), employee_id))
-                conn.commit()
-                conn.close()
-                print(f"[Mesh] Synced RFID delete for {employee_id}")
+                    c.execute(
+                        f"UPDATE {UDP_QUEUE_TABLE} SET retries = retries + 1, last_sent = ? WHERE id = ?",
+                        (time.time(), ident),
+                    )
+            conn.commit()
+            conn.close()
         except Exception as e:
-            print("Mesh receive error:", e)
-
-def start_mesh_broadcast(interval=5):
-    BROADCAST_IP = "255.255.255.255"
-    DEVICE_ID = platform.node() or f"pi_{os.getpid()}"
-    def broadcaster():
-        while True:
             try:
-                MY_IP = get_self_ip()
-                msg = {
-                    "device": DEVICE_ID,
-                    "ip": MY_IP,
-                    "status": "active",
-                    "timestamp": time.time()
-                }
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                sock.sendto(json.dumps(msg).encode(), (BROADCAST_IP, BROADCAST_PORT))
-                sock.close()
-            except Exception as e:
-                print(f"[Mesh] Broadcast error: {e}")
-            time.sleep(interval)
-    threading.Thread(target=broadcaster, daemon=True).start()
+                current_app.logger.error(f"[mesh][_udp_queue_worker] error: {e}")
+            except Exception:
+                print(f"[mesh][_udp_queue_worker] error: {e}")
+        # sleep small amount
+        stop_event.wait(1.0)
 
-def start_mesh_receivers():
-    threading.Thread(target=receive_mesh_broadcast, daemon=True).start()
-    threading.Thread(target=receive_mesh_udp, daemon=True).start()
-    start_mesh_broadcast()
 
-# ========== End mesh.py ==========
+def _udp_listener_worker(stop_event: Event):
+    """
+    Listen for UDP messages on UDP_PORT. Handles 'discover' and 'discover_ack' messages and
+    forwards other payloads to the application's handler via a callback (if provided).
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    except Exception:
+        pass
+    try:
+        s.bind(("", UDP_PORT))
+    except Exception as e:
+        try:
+            current_app.logger.error(f"[mesh][_udp_listener_worker] bind error: {e}")
+        except Exception:
+            print(f"[mesh][_udp_listener_worker] bind error: {e}")
+        return
+
+    s.settimeout(1.0)
+    while not stop_event.is_set():
+        try:
+            data, addr = s.recvfrom(65536)
+            ip = addr[0]
+            try:
+                payload = json.loads(data.decode("utf-8"))
+            except Exception:
+                payload = None
+            if payload and isinstance(payload, dict):
+                typ = payload.get("type")
+                if typ == "discover":
+                    with KNOWN_DEVICES_LOCK:
+                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
+                    # send ack
+                    resp = {"type": "discover_ack", "from": get_self_ip(), "info": payload.get("info")}
+                    send_udp_json(ip, UDP_PORT, resp)
+                elif typ == "discover_ack":
+                    with KNOWN_DEVICES_LOCK:
+                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
+                else:
+                    # application-level payload: call optional handler if app set it
+                    handler = getattr(current_app, "mesh_incoming_handler", None)
+                    if callable(handler):
+                        try:
+                            handler(payload, ip)
+                        except Exception as e:
+                            try:
+                                current_app.logger.error(f"[mesh] incoming handler error: {e}")
+                            except Exception:
+                                print(f"[mesh] incoming handler error: {e}")
+        except socket.timeout:
+            continue
+        except Exception as e:
+            try:
+                current_app.logger.error(f"[mesh][_udp_listener_worker] error: {e}")
+            except Exception:
+                print(f"[mesh][_udp_listener_worker] error: {e}")
+    try:
+        s.close()
+    except Exception:
+        pass
+
+
+# -------------------------
+# Public control/utility
+# -------------------------
+def start_mesh(app=None):
+    """
+    Start mesh worker threads. Call once during app startup.
+    Example in app.py:
+        from mesh import start_mesh
+        start_mesh(app)
+    """
+    global _UDP_STOP_EVENT, _UDP_QUEUE_THREAD, _UDP_LISTENER_THREAD
+    if _UDP_STOP_EVENT is not None:
+        # already started
+        return
+    _UDP_STOP_EVENT = Event()
+    # threads must receive the stop_event
+    _UDP_QUEUE_THREAD = threading.Thread(target=_udp_queue_worker, args=(_UDP_STOP_EVENT,), daemon=True, name="udp-queue")
+    _UDP_LISTENER_THREAD = threading.Thread(
+        target=_udp_listener_worker, args=(_UDP_STOP_EVENT,), daemon=True, name="udp-listener"
+    )
+    _UDP_QUEUE_THREAD.start()
+    _UDP_LISTENER_THREAD.start()
+    # attach blueprint to app if provided
+    if app is not None:
+        app.register_blueprint(mesh_bp)
+
+
+def stop_mesh():
+    """
+    Stop background threads cleanly.
+    """
+    global _UDP_STOP_EVENT, _UDP_QUEUE_THREAD, _UDP_LISTENER_THREAD
+    if _UDP_STOP_EVENT is None:
+        return
+    _UDP_STOP_EVENT.set()
+    # join threads with timeout
+    if _UDP_QUEUE_THREAD is not None:
+        _UDP_QUEUE_THREAD.join(timeout=2.0)
+    if _UDP_LISTENER_THREAD is not None:
+        _UDP_LISTENER_THREAD.join(timeout=2.0)
+    _UDP_STOP_EVENT = None
+    _UDP_QUEUE_THREAD = None
+    _UDP_LISTENER_THREAD = None
+
+
+# -------------------------
+# Flask endpoints for debug / control (blueprint)
+# -------------------------
+@mesh_bp.route("/api/discover_now", methods=["GET", "POST"])
+def api_discover_now():
+    payload = {"type": "discover", "from": get_self_ip(), "info": {"name": socket.gethostname()}}
+    ok = send_udp_json(BROADCAST_ADDR, UDP_PORT, payload, use_broadcast=True)
+    if not ok:
+        # queue for reliability
+        queue_udp_message(BROADCAST_ADDR, UDP_PORT, payload)
+    return jsonify({"success": True})
+
+
+@mesh_bp.route("/api/devices", methods=["GET"])
+def api_devices():
+    with KNOWN_DEVICES_LOCK:
+        devices = {k: v for k, v in KNOWN_DEVICES.items()}
+    return jsonify(devices)
+
+
+@mesh_bp.route("/api/udp_status", methods=["GET"])
+def api_udp_status():
+    with KNOWN_DEVICES_LOCK:
+        devices = [{"ip": ip, "last_seen": info["last_seen"], "info": info.get("info")} for ip, info in KNOWN_DEVICES.items()]
+    qcount = None
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"SELECT count(*) FROM {UDP_QUEUE_TABLE}")
+        qcount = c.fetchone()[0]
+        conn.close()
+    except Exception:
+        qcount = None
+    return jsonify({"devices": devices, "udp_queue_count": qcount})
+
+
+# -------------------------
+# Module init: attempt to create table / columns early (safe no-op if DB locked)
+# -------------------------
+try:
+    _ensure_udp_table_and_columns()
+except Exception:
+    # ignore init errors; the functions will call ensure before operations as well
+    pass

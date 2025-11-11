@@ -98,8 +98,14 @@ def run_parallel(*targets):
 # -----------------------------------------------------------------------------
 # Flask app setup
 # -----------------------------------------------------------------------------
-app = Flask(__name__, static_folder="static", template_folder="templates")
-app.secret_key = "supersecret"  # required for session
+
+ADMIN_PW_FILE = "admin_pw.txt"
+USERS_IMG_DIR = "./users_img"
+DB_PATH = os.environ.get("APP_DB_PATH", "users.db")
+UDP_PORT = int(os.environ.get("UDP_PORT", "5006"))
+BROADCAST_ADDR = os.environ.get("BROADCAST_ADDR", "255.255.255.255")
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "supersecret")
 
 # Branding (used in templates)
 app.config.update(
@@ -179,8 +185,13 @@ def api_thankyou_events():
 # Admin / DB constants
 # -----------------------------------------------------------------------------
 ADMIN_PW_FILE = "admin_pw.txt"
-DB_PATH = "users.db"
 USERS_IMG_DIR = "./users_img"
+DB_PATH = os.environ.get("APP_DB_PATH", "users.db")
+UDP_PORT = int(os.environ.get("UDP_PORT", "5006"))
+BROADCAST_ADDR = os.environ.get("BROADCAST_ADDR", "255.255.255.255")
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET", "supersecret")
+
 
 # --- Prevent client/proxy caching for all JSON endpoints and streams ---
 @app.after_request
@@ -450,9 +461,6 @@ import uuid
 import time
 from datetime import datetime
 
-
-UDP_PORT = 5006
-BROADCAST_ADDR = "255.255.255.255"
 UDP_SEND_TIMEOUT = 0.6
 
 # In-memory structures
@@ -465,6 +473,25 @@ _ACKED_MSGS_LOCK = threading.Lock()
 UDP_QUEUE_TABLE = "udp_queue"
 
 def ensure_udp_queue_table():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute(f"""
+        CREATE TABLE IF NOT EXISTS {UDP_QUEUE_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_ip TEXT NOT NULL,
+            target_port INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            retries INTEGER DEFAULT 0,
+            last_sent REAL DEFAULT 0
+        )
+        """)
+        conn.commit()
+    except Exception as e:
+        print("[UDP] ensure table error:", e)
+    finally:
+        conn.close()
+
     try:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         c = conn.cursor()
@@ -496,7 +523,7 @@ def get_self_ip():
 def _make_send_socket():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    s.settimeout(UDP_SEND_TIMEOUT)
+    s.settimeout(2.0)
     return s
 
 def _make_listen_socket():
@@ -589,98 +616,100 @@ def send_reliable(payload: dict, targets=None, max_retries=5, retry_interval=1.0
             msg_ids.append(msg_id)
     return msg_ids[0] if len(msg_ids)==1 else msg_ids
 
-def _udp_queue_worker():
-    """Background worker that reads pending queue and sends, handles ACKs and retries."""
-    send_sock = _make_send_socket()
-    while True:
+def _udp_queue_worker(stop_event: Event):
+    """Background worker that drains the queue and retries sending."""
+    ensure_udp_queue_table()
+    while not stop_event.is_set():
         try:
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             c = conn.cursor()
-            # select pending items
-            rows = c.execute(f"SELECT id, target_ip, payload, retries, last_sent FROM {UDP_QUEUE_TABLE} ORDER BY last_sent ASC LIMIT 50").fetchall()
+            c.execute(f"SELECT id,target_ip,target_port,payload,retries FROM {UDP_QUEUE_TABLE} ORDER BY id LIMIT 20")
+            rows = c.fetchall()
+            for r in rows:
+                ident, ip, port, payload_text, retries = r
+                payload = json.loads(payload_text)
+                ok = send_udp_json(ip, port, payload)
+                if ok:
+                    c.execute(f"DELETE FROM {UDP_QUEUE_TABLE} WHERE id = ?", (ident,))
+                else:
+                    c.execute(f"UPDATE {UDP_QUEUE_TABLE} SET retries = retries + 1, last_sent = ? WHERE id = ?",
+                              (time.time(), ident))
+            conn.commit()
             conn.close()
-            now = time.time()
-            for row in rows:
-                msg_id, target_ip, payload_json, retries, last_sent = row
-                # simple backoff: don't resend too quickly
-                if now - last_sent < (retry_interval := (1.0 + retries*0.5)):
-                    continue
-                if retries >= 20:
-                    # drop after too many retries
-                    print(f"[UDP] dropping msg {msg_id} after {retries} retries")
-                    _delete_queue_item(msg_id)
-                    continue
-                # send packet
-                try:
-                    addr = target_ip or BROADCAST_ADDR
-                    send_sock.sendto(payload_json.encode('utf-8'), (addr, UDP_PORT))
-                except Exception as e:
-                    # log and continue - update retries
-                    pass
-                # update retries and last_sent
-                try:
-                    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-                    c = conn.cursor()
-                    c.execute(f"UPDATE {UDP_QUEUE_TABLE} SET retries=retries+1, last_sent=? WHERE id=?", (time.time(), msg_id))
-                    conn.commit()
-                    conn.close()
-                except Exception:
-                    pass
-                # short sleep to avoid flooding
-                time.sleep(0.02)
-            # purge acknowledged messages from the queue
-            with _ACKED_MSGS_LOCK:
-                acked = list(_ACKED_MSGS)
-            for ack_id in acked:
-                _delete_queue_item(ack_id)
-                with _ACKED_MSGS_LOCK:
-                    if ack_id in _ACKED_MSGS:
-                        _ACKED_MSGS.remove(ack_id)
-            time.sleep(0.8)
         except Exception as e:
-            print("[UDP queue worker] error:", e)
-            time.sleep(1.0)
+            print("[UDP] queue worker error:", e)
+        # small sleep
+        stop_event.wait(1.0)
 
-def _udp_listener_worker():
-    """Background listener: accept messages, update KNOWN_DEVICES, send ACKs, and dispatch payloads."""
-    s = _make_listen_socket()
-    while True:
+
+def _udp_listener_worker(stop_event: Event):
+    """Listens to UDP port for discovery/acks from other devices."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    except Exception:
+        pass
+    s.bind(("", UDP_PORT))
+    s.settimeout(1.0)
+    while not stop_event.is_set():
         try:
-            data, addr = s.recvfrom(131072)
-            ip = addr[0]
-            now = time.time()
+            data, addr = s.recvfrom(65536)
+            ip, port = addr[0], addr[1]
             try:
-                obj = json.loads(data.decode('utf-8', 'ignore'))
+                payload = json.loads(data.decode("utf-8"))
             except Exception:
-                continue
-            # update known devices
-            with KNOWN_DEVICES_LOCK:
-                KNOWN_DEVICES[ip] = {"ip": ip, "last_seen": now, "info": obj.get("info")}
-            # if it's an ack from remote, mark as acked
-            if obj.get("type") == "udp_ack" and obj.get("ack_id"):
-                ack_id = obj.get("ack_id")
-                with _ACKED_MSGS_LOCK:
-                    _ACKED_MSGS.add(ack_id)
-                continue
-            # send ack back to sender to indicate receipt (for reliable senders)
-            try:
-                ack = {"type": "udp_ack", "ack_id": obj.get("_msg_id"), "from": get_self_ip()}
-                s.sendto(json.dumps(ack, separators=(',', ':')).encode('utf-8'), (ip, UDP_PORT))
-            except Exception:
-                pass
-            # dispatch payload for local handling (don't process our own messages)
-            if obj.get("_from") == get_self_ip():
-                continue
-            # handle types: finger_register, user_register, user_edit, user_delete, user_login, rfid_register, etc.
-            try:
-                threading.Thread(target=_apply_incoming_payload, args=(obj,), daemon=True).start()
-            except Exception:
-                pass
+                payload = None
+            # handle discovery message types
+            if payload and isinstance(payload, dict):
+                typ = payload.get("type")
+                if typ == "discover":
+                    # reply with a discovery-ack
+                    with KNOWN_DEVICES_LOCK:
+                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
+                    # send back ack
+                    resp = {"type": "discover_ack", "from": get_self_ip(), "info": payload.get("info")}
+                    try:
+                        send_udp_json(ip, UDP_PORT, resp)
+                    except Exception as e:
+                        print("[UDP] send ack error:", e)
+                elif typ == "discover_ack":
+                    with KNOWN_DEVICES_LOCK:
+                        KNOWN_DEVICES[ip] = {"last_seen": time.time(), "info": payload.get("info")}
+                else:
+                    # application-level payload (sync/register/edit/delete)
+                    # you should handle these payload types in your app's message handler
+                    handle_incoming_mesh_payload(payload, ip)
         except socket.timeout:
             continue
         except Exception as e:
-            print("[UDP listener] error:", e)
-            time.sleep(0.5)
+            print("[UDP] listener error:", e)
+    try:
+        s.close()
+    except Exception:
+        pass
+        
+def handle_incoming_mesh_payload(payload: dict, ip: str):
+    # Implement your application logic: e.g., if payload['type']=='user_upsert', apply to local DB
+    try:
+        typ = payload.get("type")
+        if typ == "user_upsert":
+            # sample: call your existing handler to upsert user
+            print(f"[MESH] user_upsert from {ip}")
+            # call existing function: app_user_upsert(payload['data'])
+        elif typ == "user_delete":
+            print(f"[MESH] user_delete from {ip}")
+        # add more handlers as needed
+    except Exception as e:
+        print("[MESH] handle incoming error:", e)
+
+UDP_STOP_EVENT = Event()
+UDP_QUEUE_THREAD = threading.Thread(target=_udp_queue_worker, args=(UDP_STOP_EVENT, ), daemon=True)
+UDP_LISTENER_THREAD = threading.Thread(target=_udp_listener_worker, args=(UDP_STOP_EVENT, ), daemon=True)
+
+# Start them on import / app start
+UDP_QUEUE_THREAD.start()
+UDP_LISTENER_THREAD.start()
+
 
 def _apply_incoming_payload(payload: dict):
     """Apply incoming payloads to local DB. This is minimal and safe; expand as needed."""
@@ -758,29 +787,33 @@ def load_mesh_state():
     with KNOWN_DEVICES_LOCK:
         return {ip: {"ip": info["ip"], "last_seen": info["last_seen"], "info": info.get("info")} for ip, info in KNOWN_DEVICES.items()}
 
-def send_udp_json(target_ip, port, payload):
-    """
-    Backwards-compatible send helper: enqueue payload to single target_ip (or broadcast if target_ip is falsy).
-    Now prefers saved mesh devices if any are configured.
-    - target_ip, port are accepted for compatibility but ignored when mesh is configured (we use saved list).
-    """
+def send_udp_json(ip, port, payload, use_broadcast=False):
+    """Send JSON payload via UDP. Returns True on success."""
     try:
-        # If a caller explicitly passed a target_ip (not None/""), respect it.
-        if target_ip:
-            # single-target reliable send
-            return send_reliable(payload, targets=[target_ip]) is not None
-        # else no explicit target -> check saved mesh
-        saved = get_selected_mesh_devices()
-        if saved:
-            # send to each saved device
-            send_reliable(payload, targets=saved)
-            return True
-        # fallback to broadcast
-        send_reliable(payload, targets=None)
+        s = _make_send_socket()
+        data = json.dumps(payload).encode("utf-8")
+        addr = (ip, int(port))
+        s.sendto(data, addr)
+        s.close()
+        # persist to queue only if needed (we try immediate send; queue logic handles retries)
         return True
     except Exception as e:
-        print("[send_udp_json] error:", e)
+        print(f"[UDP] send error to {ip}:{port} ->", e)
         return False
+
+def queue_udp_message(ip, port, payload):
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"INSERT INTO {UDP_QUEUE_TABLE} (target_ip, target_port, payload) VALUES (?, ?, ?)",
+                  (ip, int(port), json.dumps(payload)))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print("[UDP] queue insert error:", e)
+        return False
+
 
 def broadcast_login_udp(emp_id, name, medium):
     try:
@@ -794,24 +827,38 @@ def broadcast_login_tcp(emp_id, name, medium):
     broadcast_login_udp(emp_id, name, medium)
 
 # discovery endpoints used by UI
-@app.route("/api/devices")
+@app.route("/api/devices", methods=["GET"])
 def api_devices():
     with KNOWN_DEVICES_LOCK:
-        devices = []
-        for ip, info in KNOWN_DEVICES.items():
-            devices.append({"ip": ip, "last_seen": info["last_seen"], "info": info.get("info")})
-    return jsonify({"devices": devices})
-
-@app.route("/api/discover_now")
-def api_discover_now():
-    # broadcast a short discovery ping and wait ~1s for responses
+        devices = {k: v for k, v in KNOWN_DEVICES.items()}
+    return jsonify(devices)
+    
+@app.route("/api/udp_status", methods=["GET"])
+def api_udp_status():
+    with KNOWN_DEVICES_LOCK:
+        devices = [{"ip": ip, "last_seen": info["last_seen"], "info": info.get("info")} for ip, info in KNOWN_DEVICES.items()]
     try:
-        ping = {"type":"udp_ping","info":{"name": get_self_ip()},"ts":time.time()}
-        send_reliable(ping, targets=None)
-        time.sleep(1.0)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute(f"SELECT count(*) FROM {UDP_QUEUE_TABLE}")
+        qcount = c.fetchone()[0]
+        conn.close()
     except Exception:
-        pass
-    return api_devices()
+        qcount = None
+    return jsonify({"devices": devices, "udp_queue_count": qcount})
+
+
+@app.route("/api/discover_now", methods=["POST", "GET"])
+def api_discover_now():
+    # broadcast a discover message
+    payload = {"type": "discover", "from": get_self_ip(), "info": {"name": os.uname().nodename}}
+    try:
+        send_udp_json(BROADCAST_ADDR, UDP_PORT, payload, use_broadcast=True)
+    except Exception as e:
+        print("[API] discover send error:", e)
+        # queue for reliability
+        queue_udp_message(BROADCAST_ADDR, UDP_PORT, payload)
+    return jsonify({"success": True})
 
 @app.route("/api/save_mesh_devices", methods=["POST"])
 def api_save_mesh_devices():
