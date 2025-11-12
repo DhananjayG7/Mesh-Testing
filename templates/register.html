@@ -35,6 +35,16 @@ html, body{
 .menu-back-btn{ background:#eee; color:#205081; padding:9px 18px; font-size:1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:background .16s; min-width:92px; margin-right:12px; }
 .menu-back-btn:hover{ background:#ffa500; color:#fff; }
 
+/* Inset custom scrollbar variables (same as Diagnostic page) */
+:root{
+  --sb-inset-right: 36px;
+  --sb-width: 22px;
+  --sb-radius: 12px;
+  --sb-track: rgba(0,0,0,0.06);
+  --sb-thumb: #bfbfbf;
+  --sb-min-thumb: 48px;
+}
+
 /* ======= ADMIN LOGIN STAGE ======= */
 :root{ --hdrH:72px; }
 .stage{
@@ -176,6 +186,22 @@ button:hover:enabled { background:#ff7c00; }
 .pw-actions{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
 .simple-keyboard{ max-width:min(560px, 96vw); margin:6px auto 0; }
 #osk-wrap{ position:relative; z-index:10000; }
+
+/* ===== Inset custom scrollbar styles (track + thumb) ===== */
+.sb-track{
+  position:fixed; right:var(--sb-inset-right); width:var(--sb-width);
+  top:90px; height:calc(100vh - 90px); z-index:9999;
+  background:var(--sb-track); border-radius:var(--sb-radius); box-sizing:border-box;
+  display:block;
+}
+.sb-thumb{
+  position:absolute; left:2px; right:2px; top:0;
+  height:80px; background:var(--sb-thumb); border-radius:calc(var(--sb-radius) - 2px);
+  box-shadow:0 1px 2px rgba(0,0,0,0.25);
+  cursor:grab; touch-action:none;
+}
+.sb-thumb:active{ cursor:grabbing; }
+
 {% endblock %}
 
 {% block body %}
@@ -344,12 +370,102 @@ button:hover:enabled { background:#ff7c00; }
     Format: <b>YYYY-MM-DD</b>
   </div>
 </div>
+
+<!-- Inset scrollbar UI (sibling of .page-shell) -->
+<div class="sb-track" id="sbTrack" aria-hidden="true">
+  <div class="sb-thumb" id="sbThumb"></div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/css/index.css"/>
 <script src="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/index.js"></script>
 
+<!-- ===== Inset scrollbar logic (syncs with .page-shell) ===== -->
+<script>
+(function(){
+  const area  = document.querySelector('.page-shell');
+  const head  = document.querySelector('.header');
+  const track = document.getElementById('sbTrack');
+  const thumb = document.getElementById('sbThumb');
+  if (!area || !head || !track || !thumb) return;
+
+  let dragging = false, startY = 0, startScrollTop = 0;
+
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  function layout(){
+    const hb = Math.ceil(head.getBoundingClientRect().bottom);
+    const h  = window.innerHeight - hb;
+    track.style.top = hb + 'px';
+    track.style.height = h + 'px';
+    area.style.height = h + 'px';
+    refreshThumb();
+  }
+
+  function refreshThumb(){
+    const trackH    = track.clientHeight;
+    const maxScroll = Math.max(0, area.scrollHeight - area.clientHeight);
+
+    let ratio   = area.clientHeight / (area.scrollHeight || 1);
+    let tMin    = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sb-min-thumb')) || 48;
+    let tHeight = Math.round(trackH * ratio);
+    if (maxScroll <= 0) { tHeight = trackH; }
+    tHeight = clamp(tHeight, tMin, trackH);
+
+    thumb.style.height = tHeight + 'px';
+    const maxTop   = trackH - tHeight;
+    const tTop     = maxScroll ? (area.scrollTop / maxScroll) * maxTop : 0;
+    thumb.style.transform = 'translateY(' + tTop + 'px)';
+  }
+
+  thumb.addEventListener('pointerdown', (e)=>{
+    dragging = true;
+    try{ thumb.setPointerCapture(e.pointerId); }catch(_){}
+    startY = e.clientY;
+    startScrollTop = area.scrollTop;
+    e.preventDefault();
+  });
+  thumb.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    const trackH    = track.clientHeight;
+    const tH        = thumb.offsetHeight;
+    const maxTop    = Math.max(1, trackH - tH);
+    const maxScroll = Math.max(1, area.scrollHeight - area.clientHeight);
+    const dY        = e.clientY - startY;
+    const perPixel  = maxScroll / maxTop;
+    area.scrollTop  = clamp(startScrollTop + dY * perPixel, 0, maxScroll);
+  });
+  function endDrag(e){
+    if(!dragging) return;
+    dragging = false;
+    try{ thumb.releasePointerCapture(e.pointerId); }catch(_){}
+  }
+  thumb.addEventListener('pointerup', endDrag);
+  thumb.addEventListener('pointercancel', endDrag);
+  thumb.addEventListener('lostpointercapture', ()=> dragging = false);
+
+  track.addEventListener('pointerdown', (e)=>{
+    if (e.target !== track) return;
+    const rect   = track.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    const tH     = thumb.offsetHeight;
+    const trackH = track.clientHeight;
+    const maxTop = Math.max(1, trackH - tH);
+    const maxScr = Math.max(1, area.scrollHeight - area.clientHeight);
+    const tgtTop = clamp(clickY - tH/2, 0, maxTop);
+    area.scrollTop = (tgtTop / maxTop) * maxScr;
+  });
+
+  area.addEventListener('scroll', refreshThumb, { passive:true });
+  window.addEventListener('resize', layout);
+  window.addEventListener('load', layout);
+  // small delay to ensure images/video measured correctly
+  setTimeout(layout, 300);
+})();
+</script>
+
+<!-- ===== Existing registration scripts (unchanged) ===== -->
 <script>
 /* ===================== CLOCK ===================== */
 const clockEl = document.getElementById('clock');
