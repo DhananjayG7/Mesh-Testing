@@ -411,7 +411,74 @@ def get_db_connection():
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
+    
+def ensure_app_settings_schema():
+    """
+    Ensure app_settings exists and has `key` as PRIMARY KEY.
+    If an older version exists without PK, migrate it in-place.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1) Does app_settings exist?
+        cur.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='app_settings'
+        """)
+        row = cur.fetchone()
 
+        if not row:
+            # Create fresh table with correct schema
+            cur.execute("""
+                CREATE TABLE app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            conn.commit()
+            return
+
+        # 2) Check if `key` is already PRIMARY KEY
+        cur.execute("PRAGMA table_info(app_settings)")
+        cols = cur.fetchall()
+        # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        has_pk_on_key = any(c[1] == "key" and c[5] == 1 for c in cols)
+
+        if has_pk_on_key:
+            # Schema already correct
+            return
+
+        # 3) Migrate: rename old -> new with PK, copy data
+        conn.execute("BEGIN")
+        cur.execute("ALTER TABLE app_settings RENAME TO app_settings_old")
+
+        cur.execute("""
+            CREATE TABLE app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
+        # INSERT OR IGNORE so duplicate keys don't break the migration
+        cur.execute("""
+            INSERT OR IGNORE INTO app_settings(key, value)
+            SELECT key, value FROM app_settings_old
+        """)
+
+        cur.execute("DROP TABLE app_settings_old")
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# Run app_settings schema migration once at startup
+ensure_app_settings_schema()
+
+    
 # ========= NEW: ensure logs table =========
 def ensure_logs_table():
     try:
@@ -440,7 +507,10 @@ def ensure_logs_table():
 
 def get_setting(key, default=None):
     conn = get_db_connection()
-    row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key=?",
+        (key,)
+    ).fetchone()
     conn.close()
     if row and row["value"] is not None:
         return row["value"]
@@ -456,7 +526,8 @@ def set_setting(key, value):
     )
     conn.commit()
     conn.close()
-
+    
+    
 import socket
 import threading
 import json
