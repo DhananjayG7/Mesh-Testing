@@ -166,7 +166,7 @@ button:hover:enabled { background:#ff7c00; }
 #user-list .meta{ display:flex; gap:8px; align-items:center; color:#546a88; font-size:.84rem; }
 #user-list .pill{ background:#eef3f9; color:#205081; font-size:.78rem; padding:2px 8px; border-radius:999px; white-space:nowrap; }
 
-/* ====== Admin Password Modal + OSK ====== */
+/* ====== Admin Password Modal (no custom OSK here) ====== */
 .pw-grid{ display:flex; flex-direction:column; gap:10px; align-items:center; }
 .pw-wrap{
   position:relative;
@@ -184,8 +184,6 @@ button:hover:enabled { background:#ff7c00; }
   color:#205081; font-size:1.1rem; padding:6px;
 }
 .pw-actions{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
-.simple-keyboard{ max-width:min(560px, 96vw); margin:6px auto 0; }
-#osk-wrap{ position:relative; z-index:10000; }
 
 /* ===== Inset custom scrollbar styles (track + thumb) ===== */
 .sb-track{
@@ -201,7 +199,6 @@ button:hover:enabled { background:#ff7c00; }
   cursor:grab; touch-action:none;
 }
 .sb-thumb:active{ cursor:grabbing; }
-
 {% endblock %}
 
 {% block body %}
@@ -267,7 +264,6 @@ button:hover:enabled { background:#ff7c00; }
       </select>
 
       <label for="birthdate">Birthdate</label>
-      <!-- Numeric OSK + auto-format YYYY-MM-DD -->
       <input id="birthdate" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" maxlength="10" autocomplete="off">
 
       <div class="row">
@@ -344,9 +340,10 @@ button:hover:enabled { background:#ff7c00; }
 <div class="modal-bg" id="pw-modal" role="dialog" aria-modal="true" aria-labelledby="pw-title">
   <div class="modal-box">
     <h3 id="pw-title" style="margin:0 0 8px;">Admin Password</h3>
+
     <div class="pw-grid">
       <div class="pw-wrap">
-        <input id="pw-input" type="password" class="pw-input" placeholder="Enter Admin Password" autocomplete="off" inputmode="none">
+        <input id="pw-input" type="password" class="pw-input" placeholder="Enter Admin Password" autocomplete="off">
         <button class="pw-eye" id="pw-eye" aria-label="Show password"><i class="fa fa-eye"></i></button>
       </div>
       <div class="pw-actions">
@@ -354,20 +351,8 @@ button:hover:enabled { background:#ff7c00; }
         <button class="btn-secondary" id="pw-cancel">Cancel</button>
       </div>
     </div>
-    <div id="osk-wrap" class="hidden"><div id="simple-keyboard"></div></div>
-    <div id="pw-msg" class="result" style="margin-top:8px;"></div>
-  </div>
-</div>
 
-<!-- Birthdate Numeric Keyboard -->
-<div id="birth-osk-wrap" class="hidden" aria-hidden="true"
-     style="position:fixed; left:50%; transform:translateX(-50%);
-            bottom:12px; z-index:10000; background:#fff; border:1px solid #E6EBF2;
-            border-radius:14px; box-shadow:0 10px 24px rgba(0,0,0,.18);
-            padding:10px 12px;">
-  <div id="birth-keyboard"></div>
-  <div style="text-align:center; font-size:.9rem; color:#667a94; margin-top:6px;">
-    Format: <b>YYYY-MM-DD</b>
+    <div id="pw-msg" class="result" style="margin-top:8px;"></div>
   </div>
 </div>
 
@@ -378,11 +363,18 @@ button:hover:enabled { background:#ff7c00; }
 {% endblock %}
 
 {% block scripts %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/css/index.css"/>
-<script src="https://cdn.jsdelivr.net/npm/simple-keyboard@3/build/index.js"></script>
-
-<!-- ===== Inset scrollbar logic (syncs with .page-shell) ===== -->
 <script>
+/* ---- modal helpers ---- */
+function openModal(id){
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'flex';
+}
+function closeModal(id){
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+
+/* ===== Inset scrollbar logic (syncs with .page-shell) ===== */
 (function(){
   const area  = document.querySelector('.page-shell');
   const head  = document.querySelector('.header');
@@ -460,16 +452,19 @@ button:hover:enabled { background:#ff7c00; }
   area.addEventListener('scroll', refreshThumb, { passive:true });
   window.addEventListener('resize', layout);
   window.addEventListener('load', layout);
-  // small delay to ensure images/video measured correctly
   setTimeout(layout, 300);
 })();
-</script>
 
-<!-- ===== Existing registration scripts (unchanged) ===== -->
-<script>
 /* ===================== CLOCK ===================== */
 const clockEl = document.getElementById('clock');
-function tick(){ if(clockEl) clockEl.textContent = new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:true}); }
+function tick(){
+  if(clockEl)
+    clockEl.textContent = new Date().toLocaleString("en-IN",{
+      day:"2-digit",month:"short",
+      hour:"2-digit",minute:"2-digit",second:"2-digit",
+      hour12:true
+    });
+}
 setInterval(tick, 1000); tick();
 
 /* =================== FLAGS & GLOBALS =================== */
@@ -512,7 +507,7 @@ function unlockForm(){
 
 /* =================== ADMIN LOGIN FLOWS =================== */
 async function faceLoop(){
-  if (adminUnlocked || faceLoopActive) return; 
+  if (adminUnlocked || faceLoopActive) return;
   faceLoopActive = true;
 
   const probe = document.createElement('canvas'); probe.width=224; probe.height=168;
@@ -543,7 +538,7 @@ async function faceLoop(){
   }
 }
 async function fingerPoll(){
-  if (adminUnlocked || fingerPollRunning) return; 
+  if (adminUnlocked || fingerPollRunning) return;
   fingerPollRunning = true;
   while(!adminUnlocked && formWrapper.classList.contains('hidden')){
     try{
@@ -555,7 +550,7 @@ async function fingerPoll(){
   }
 }
 async function rfidPoll(){
-  if (adminUnlocked || rfidPollRunning) return; 
+  if (adminUnlocked || rfidPollRunning) return;
   rfidPollRunning = true;
   while(!adminUnlocked && formWrapper.classList.contains('hidden')){
     try{
@@ -567,68 +562,36 @@ async function rfidPoll(){
   }
 }
 
-/* ===== Password modal + OSK ===== */
-const pwModal = document.getElementById('pw-modal');
+/* ===== Password modal (NO custom OSK) ===== */
 const pwInput = document.getElementById('pw-input');
 const pwMsg   = document.getElementById('pw-msg');
 const pwEye   = document.getElementById('pw-eye');
-const oskWrap = document.getElementById('osk-wrap');
 
-let keyboard = null;
-let oskVisible = false;
-
-function openModal(id){ document.getElementById(id).style.display='flex'; }
-function closeModal(id){ document.getElementById(id).style.display='none'; }
-
-function openOSK(){
-  if(!keyboard){
-    keyboard = new window.SimpleKeyboard.default({
-      onChange: input => { pwInput.value = input; },
-      onKeyPress: button => {
-        if(button === "{enter}") doPwSubmit();
-        if(button === "{shift}" || button === "{lock}") toggleShift();
-      },
-      layout: {
-        default: [
-          "` 1 2 3 4 5 6 7 8 9 0 - = {bksp}",
-          "{tab} q w e r t y u i o p [ ] \\",
-          "{lock} a s d f g h j k l ; ' {enter}",
-          "{shift} z x c v b n m , . / {shift}",
-          "{space}"
-        ],
-        shift: [
-          "~ ! @ # $ % ^ & * ( ) _ + {bksp}",
-          "{tab} Q W E R T Y U I O P { } |",
-          "{lock} A S D F G H J K L : \" {enter}",
-          "{shift} Z X C V B N M < > ? {shift}",
-          "{space}"
-        ]
-      },
-      display: { "{bksp}":"⌫","{enter}":"⏎","{tab}":"⇥","{lock}":"⇪","{shift}":"⇧","{space}":"[ space ]" }
-    });
-  }
-  oskWrap.classList.remove('hidden');
-  oskVisible = true;
-}
-function closeOSK(){ oskWrap.classList.add('hidden'); oskVisible = false; }
-function toggleShift(){
-  const layoutName = keyboard.options.layoutName || "default";
-  keyboard.setOptions({ layoutName: layoutName === "default" ? "shift" : "default" });
-}
-pwInput.addEventListener('focus', openOSK);
-document.addEventListener('mousedown', (e)=>{
-  if(!pwModal.contains(e.target)) return;
-  const inside = e.target===pwInput || oskWrap.contains(e.target);
-  if(!inside && oskVisible) closeOSK();
-});
 pwEye.addEventListener('click', ()=>{
   const isPw = pwInput.type === 'password';
   pwInput.type = isPw ? 'text' : 'password';
   pwEye.innerHTML = isPw ? '<i class="fa fa-eye-slash"></i>' : '<i class="fa fa-eye"></i>';
 });
+
+document.getElementById('pwBtn').addEventListener('click', ()=>{
+  openModal('pw-modal');
+  pwMsg.textContent = '';
+  pwInput.value = '';
+  setTimeout(()=> pwInput.focus(), 60);
+});
+
+document.getElementById('pw-cancel').addEventListener('click', ()=>{
+  closeModal('pw-modal');
+  pwInput.value = '';
+});
+
 function doPwSubmit(){
   const pw = pwInput.value.trim();
-  if(!pw){ pwMsg.style.color='#C0342D'; pwMsg.textContent='Enter password.'; return; }
+  if(!pw){
+    pwMsg.style.color='#C0342D';
+    pwMsg.textContent='Enter password.';
+    return;
+  }
   pwMsg.textContent='Verifying…';
   fetch('/api/operator_password_login',{
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -637,7 +600,12 @@ function doPwSubmit(){
   .then(r=>r.json()).then(j=>{
     if(j.success){
       pwMsg.style.color='#157347'; pwMsg.textContent='Verified';
-      setTimeout(()=>{ closeModal('pw-modal'); pwInput.value=''; closeOSK(); showBanner(true,'Admin verified (password)'); unlockForm(); }, 300);
+      setTimeout(()=>{
+        closeModal('pw-modal');
+        pwInput.value='';
+        showBanner(true,'Admin verified (password)');
+        unlockForm();
+      }, 300);
     }else{
       pwMsg.style.color='#C0342D';
       pwMsg.textContent = j.message || 'Invalid password';
@@ -647,9 +615,13 @@ function doPwSubmit(){
   });
 }
 document.getElementById('pw-submit').addEventListener('click', doPwSubmit);
-document.getElementById('pw-cancel').addEventListener('click', ()=>{ closeModal('pw-modal'); closeOSK(); pwInput.value=''; });
-document.getElementById('pwBtn').addEventListener('click', ()=>{
-  openModal('pw-modal'); pwMsg.textContent=''; pwInput.value=''; pwInput.focus();
+
+/* Clicking outside the box closes the modal */
+document.getElementById('pw-modal').addEventListener('click', (e)=>{
+  if(e.target === document.getElementById('pw-modal')){
+    closeModal('pw-modal');
+    pwInput.value = '';
+  }
 });
 
 /* Auto-start admin auth loops */
@@ -726,7 +698,7 @@ async function fetchAllUsers(){
           emp_id: u.emp_id,
           name: u.name || '',
           role: u.role || '',
-          birthdate: u.birthdate || ''   // ISO preferred
+          birthdate: u.birthdate || ''
         }))
         .sort((a,b)=> String(a.emp_id).localeCompare(String(b.emp_id), undefined, {numeric:true, sensitivity:'base'}));
       usersLoaded = true;
@@ -1001,111 +973,6 @@ document.getElementById('fingerBtn').addEventListener('click', async ()=>{
   }
 });
 
-/* ======== Birthdate Numeric Keyboard (SimpleKeyboard) ======== */
-(function() {
-  const birthField = document.getElementById('birthdate');
-  if (!birthField) return;
-
-  const wrap = document.getElementById('birth-osk-wrap');
-  let birthKB = null;
-  let kbOpen = false;
-
-  function digitsOnly(str){ return (str||'').replace(/\D+/g,''); }
-  function formatYYYYMMDDFromDigits(digs){
-    digs = (digs||'').slice(0,8);
-    if (digs.length <= 4) return digs;
-    if (digs.length <= 6) return digs.slice(0,4) + '-' + digs.slice(4);
-    return digs.slice(0,4) + '-' + digs.slice(4,6) + '-' + digs.slice(6);
-  }
-  function dispatchInput(el){
-    try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch(_) {}
-  }
-  function flashMessage(msg){
-    const el = document.getElementById('result-msg');
-    if (!el) return;
-    const prev = el.textContent;
-    const prevColor = el.style.color;
-    el.style.color = '#C0342D';
-    el.textContent = msg;
-    setTimeout(()=>{ el.style.color = prevColor || '#205081'; el.textContent = prev || ''; }, 1200);
-  }
-  function validateBirth(val){
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(val||'')) return false;
-    const [y,m,d] = val.split('-').map(n=>parseInt(n,10));
-    if (m < 1 || m > 12) return false;
-    if (d < 1 || d > 31) return false;
-    const mdays = [31, (y%4===0 && (y%100!==0 || y%400===0)) ? 29 : 28, 31,30,31,30,31,31,30,31,30,31];
-    if (d > mdays[m-1]) return false;
-    if (y < 1900 || y > 2100) return false;
-    return true;
-  }
-
-  function openBirthKB(){
-    if (!birthKB) {
-      birthKB = new window.SimpleKeyboard.default({
-        layout: {
-          default: [
-            "1 2 3",
-            "4 5 6",
-            "7 8 9",
-            "0 {bksp}",
-            "{enter}"
-          ]
-        },
-        display: { "{bksp}":"⌫", "{enter}":"OK" },
-        onKeyPress: (button) => {
-          if (button === "{enter}") {
-            if (validateBirth(birthField.value)) {
-              closeBirthKB();
-            } else {
-              flashMessage("Invalid date. Use YYYY-MM-DD.");
-            }
-            return;
-          }
-          if (button === "{bksp}") {
-            let d = digitsOnly(birthField.value);
-            d = d.slice(0, -1);
-            birthField.value = formatYYYYMMDDFromDigits(d);
-            dispatchInput(birthField);
-            return;
-          }
-          if (/^\d$/.test(button)) {
-            let d = digitsOnly(birthField.value);
-            if (d.length >= 8) return;
-            d += button;
-            birthField.value = formatYYYYMMDDFromDigits(d);
-            dispatchInput(birthField);
-          }
-        }
-      });
-    }
-    const existingDigits = digitsOnly(birthField.value);
-    birthField.value = formatYYYYMMDDFromDigits(existingDigits);
-    wrap.classList.remove('hidden');
-    kbOpen = true;
-  }
-  function closeBirthKB(){ wrap.classList.add('hidden'); kbOpen = false; }
-
-  birthField.addEventListener('focus', openBirthKB);
-  document.addEventListener('mousedown', (e)=>{
-    if (!kbOpen) return;
-    const insideKB = wrap.contains(e.target);
-    const insideInput = (e.target === birthField);
-    if (!insideKB && !insideInput) closeBirthKB();
-  });
-  document.addEventListener('keydown', (e)=>{
-    if (kbOpen && e.key === 'Escape') closeBirthKB();
-  });
-  birthField.addEventListener('beforeinput', (e)=>{
-    if (e.inputType === 'insertText' && !/^\d$/.test(e.data)) e.preventDefault();
-  });
-  birthField.addEventListener('input', ()=>{
-    const d = digitsOnly(birthField.value);
-    birthField.value = formatYYYYMMDDFromDigits(d);
-  });
-})();
-
-/* ===== Start admin auth loops ===== */
-(function init(){ /* already kicked off above */ })();
+/* ===== Init done ===== */
 </script>
 {% endblock %}
