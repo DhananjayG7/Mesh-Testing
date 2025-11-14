@@ -212,123 +212,68 @@ def create_users_table():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
+
+    # Core users table
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        emp_id TEXT PRIMARY KEY,
-        name TEXT,
-        display_image BLOB,
-        face_encoding BLOB,
-        rfid_cards TEXT,
-        role TEXT DEFAULT 'User',
-        birthdate TEXT
+        emp_id         TEXT PRIMARY KEY,
+        name           TEXT,
+        display_image  BLOB,
+        face_encoding  BLOB,
+        rfid_cards     TEXT,
+        role           TEXT DEFAULT 'User',
+        birthdate      TEXT,
+        template_id    INTEGER
     )
     """)
-    c.execute('''CREATE TABLE IF NOT EXISTS shifts (
-        shift_code TEXT PRIMARY KEY,
-        shift_name TEXT NOT NULL,
-        from_time TEXT NOT NULL,
-        to_time TEXT NOT NULL
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS time_slots (
-        slot_code TEXT PRIMARY KEY,
-        shift_code TEXT NOT NULL,
-        slot_name TEXT NOT NULL,
-        from_time TEXT NOT NULL,
-        to_time TEXT NOT NULL,
-        FOREIGN KEY (shift_code) REFERENCES shifts(shift_code) ON DELETE CASCADE
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS menu_codes (
-        menu_code TEXT PRIMARY KEY,
-        slot_code TEXT NOT NULL,
-        menu_name TEXT NOT NULL,
-        FOREIGN KEY (slot_code) REFERENCES time_slots(slot_code) ON DELETE CASCADE
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS items (
-        item_code TEXT PRIMARY KEY,
-        menu_code TEXT NOT NULL,
-        item_name TEXT NOT NULL,
-        FOREIGN KEY (menu_code) REFERENCES menu_codes(menu_code) ON DELETE CASCADE
-    )''')
-    # legacy duplicate; kept to avoid breaking your existing code
-    c.execute('''CREATE TABLE IF NOT EXISTS item_limits (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL,
-        item_name TEXT NOT NULL,
-        item_limit INTEGER NOT NULL
-    )''')
-    # fingerprints table in users.db
-    c.execute('''CREATE TABLE IF NOT EXISTS fingerprints (
-        id INTEGER PRIMARY KEY,
+
+    # Fingerprints table (same as before)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS fingerprints (
+        id       INTEGER PRIMARY KEY,
         username TEXT,
         template BLOB NOT NULL
-    )''')
+    )
+    """)
 
     # Local queue for PG events (offline-first)
     c.execute("""
     CREATE TABLE IF NOT EXISTS pg_event_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_time TEXT NOT NULL,
-        device_ip TEXT,
-        emp_id TEXT,
-        name TEXT,
-        role TEXT,
-        medium TEXT NOT NULL,
-        success INTEGER NOT NULL,
-        payload TEXT
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_time  TEXT NOT NULL,
+        device_ip   TEXT,
+        emp_id      TEXT,
+        name        TEXT,
+        role        TEXT,
+        medium      TEXT NOT NULL,
+        success     INTEGER NOT NULL,
+        payload     TEXT
     )
     """)
 
-    # simple app settings key-value store
+    # Simple app settings key-value store
     c.execute("""
     CREATE TABLE IF NOT EXISTS app_settings (
-        key TEXT PRIMARY KEY,
+        key   TEXT PRIMARY KEY,
         value TEXT
     )
     """)
 
-    # Orders table (for kiosk orders)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        order_id TEXT UNIQUE NOT NULL,
-        emp_id TEXT NOT NULL,
-        device_id TEXT NOT NULL,
-        shift_code TEXT,
-        slot_code TEXT,
-        category TEXT NOT NULL,
-        item_code TEXT NOT NULL,
-        item_name TEXT NOT NULL,
-        qty INTEGER NOT NULL DEFAULT 1,
-        order_time TEXT NOT NULL
-    )
-    """)
-    # slot-limit tables (per user and defaults)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS user_slot_limits (
-        emp_id          TEXT NOT NULL,
-        slot_code       TEXT NOT NULL,
-        per_item_max    INTEGER,
-        slot_total_max  INTEGER,
-        daily_total_max INTEGER,
-        PRIMARY KEY(emp_id, slot_code)
-    )
-    """)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS default_slot_limits (
-        slot_code       TEXT PRIMARY KEY,
-        per_item_max    INTEGER,
-        slot_total_max  INTEGER,
-        daily_total_max INTEGER
-    )
-    """)
-
-    c.execute("CREATE INDEX IF NOT EXISTS idx_orders_emp_cat_time ON orders(emp_id, category, order_time)")
-
-    # mapping table (emp_id -> auto-incremental template_id)
+    # Mapping table (emp_id -> auto-incremental template_id) for fingerprint templates
     c.execute("""
     CREATE TABLE IF NOT EXISTS user_finger_map (
         emp_id      TEXT PRIMARY KEY,
         template_id INTEGER UNIQUE
+    )
+    """)
+
+    # Canonical fingerprint map (if you still use it)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS fingerprint_map(
+        emp_id      TEXT PRIMARY KEY,
+        template_id INTEGER UNIQUE NOT NULL,
+        name        TEXT,
+        created_at  TEXT DEFAULT (datetime('now'))
     )
     """)
 
@@ -337,6 +282,7 @@ def create_users_table():
 
 
 create_users_table()
+
 
 def has_column(table: str, column: str) -> bool:
     conn = get_db_connection()
@@ -991,14 +937,28 @@ def apply_incoming_payload(obj):
         return False
 
 # start background threads
+# ---- START UDP subsystem ----
 try:
-    ensure_udp_queue_table()
-    t_q = threading.Thread(target=_udp_queue_worker, daemon=True, name="udp-queue")
-    t_q.start()
-    t_l = threading.Thread(target=_udp_listener_worker, daemon=True, name="udp-listener")
-    t_l.start()
+    print("[UDP] Initializing UDP tables...")
+    ensure_udp_queue_table()     # <-- THIS MUST RUN BEFORE THREADS START
+    print("[UDP] udp_queue table ensured.")
+
+    UDP_STOP_EVENT = Event()
+
+    UDP_QUEUE_THREAD = threading.Thread(
+        target=_udp_queue_worker, args=(UDP_STOP_EVENT,), daemon=True
+    )
+    UDP_QUEUE_THREAD.start()
+
+    UDP_LISTENER_THREAD = threading.Thread(
+        target=_udp_listener_worker, args=(UDP_STOP_EVENT,), daemon=True
+    )
+    UDP_LISTENER_THREAD.start()
+
+    print("[UDP] Background threads started.")
 except Exception as e:
     print("[UDP] background start error:", e)
+
 
 # Public API for legacy callers in app:
 def load_mesh_state():
@@ -1105,13 +1065,21 @@ def broadcast_login_tcp(emp_id, name, medium):
     # TCP not used; reuse UDP reliable
     broadcast_login_udp(emp_id, name, medium)
 
-# discovery endpoints used by UI
 @app.route("/api/devices", methods=["GET"])
 def api_devices():
+    """Return a clean list of discovered devices with device_id + ip."""
     with KNOWN_DEVICES_LOCK:
-        devices = {k: v for k, v in KNOWN_DEVICES.items()}
-    return jsonify(devices)
-    
+        out = []
+        for ip, info in KNOWN_DEVICES.items():
+            meta = info.get("info") or {}
+            out.append({
+                "ip": ip,
+                "device_id": meta.get("device_id"),
+                "name": meta.get("name"),
+                "last_seen": info.get("last_seen"),
+            })
+    return jsonify({"devices": out})
+
 @app.route("/api/udp_status", methods=["GET"])
 def api_udp_status():
     with KNOWN_DEVICES_LOCK:
@@ -1130,7 +1098,15 @@ def api_udp_status():
 @app.route('/api/discover_now', methods=['GET','POST'])
 def api_discover_now():
     # existing behavior: broadcast discovery
-    payload = {"type": "discover", "from": get_self_ip(), "info": {"name": os.uname().nodename}}
+    payload = {
+        "type": "discover",
+        "from": get_self_ip(),
+        "info": {
+            "name": os.uname().nodename,
+            "device_id": get_device_id(),   # <-- CANT_A_001 style ID
+            "ip": get_self_ip(),            # <-- also include sender IP in info
+        },
+    }
     try:
         send_udp_json(BROADCAST_ADDR, UDP_PORT, payload, use_broadcast=True)
     except Exception:
@@ -1600,28 +1576,7 @@ threading.Thread(target=pg_sync_worker, args=(_pg_stop_event,), daemon=True).sta
 if pg_is_available():
     ensure_pg_table()
 
-
-# -----------------------------------------------------------------------------
-# Canteen open/close logic
-# -----------------------------------------------------------------------------
-def get_current_time_ui():
-    return datetime.now().strftime('%H:%M')
-
-def is_canteen_open_ui():
-    db = get_db_connection()
-    now = get_current_time_ui()
-    row = db.execute("SELECT * FROM time_slots WHERE from_time <= ? AND to_time >= ?", (now, now)).fetchone()
-    db.close()
-    return bool(row)
-
-def get_next_opening_ui():
-    db = get_db_connection()
-    now = get_current_time_ui()
-    row = db.execute("SELECT from_time FROM time_slots WHERE from_time > ? ORDER BY from_time ASC LIMIT 1", (now,)).fetchone()
-    db.close()
-    return row[0] if row else None
-
-
+ 
 # -----------------------------------------------------------------------------
 # Slot-aware helpers, limits, device ID, and ordering
 # -----------------------------------------------------------------------------
@@ -1637,169 +1592,14 @@ def set_device_id_safe(value: str):
 def _now_iso():
     return datetime.now().isoformat(timespec="seconds")
 
-def get_current_slot_row():
-    db = get_db_connection()
-    now = get_current_time_ui()
-    row = db.execute("""
-        SELECT ts.*, sh.shift_name
-        FROM time_slots ts
-        JOIN shifts sh ON sh.shift_code = ts.shift_code
-        WHERE ts.from_time <= ? AND ts.to_time >= ?
-        ORDER BY ts.from_time LIMIT 1
-    """, (now, now)).fetchone()
-    db.close()
-    return row
-
-def generate_order_id():
-    return f"ORD-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
-
-def _get_category_limit(db, category: str, item_name: str):
-    r = db.execute("SELECT item_limit FROM item_limits WHERE category=? AND item_name=? LIMIT 1",
-                   (category, item_name)).fetchone()
-    if r: return int(r["item_limit"])
-    r = db.execute("SELECT item_limit FROM item_limits WHERE category=? AND item_name='*' LIMIT 1",
-                   (category,)).fetchone()
-    return int(r["item_limit"]) if r else 1
-
-def _count_taken_today(db, emp_id: str, category: str):
-    return db.execute("""
-        SELECT COUNT(*) AS c
-        FROM orders
-        WHERE emp_id=? AND category=? AND DATE(order_time)=DATE('now','localtime')
-    """, (emp_id, category)).fetchone()["c"]
-
-def print_order_receipt(order_id, emp_id, item_name, category, slot_name, shift_name):
-    text = (
-        f"CANTEEN ORDER\n"
-        f"{'-'*28}\n"
-        f"Device : {get_device_id()}\n"
-        f"Order  : {order_id}\n"
-        f"Emp ID : {emp_id}\n"
-        f"Item   : {item_name}\n"
-        f"Cat    : {category}\n"
-        f"Shift  : {shift_name or ''}\n"
-        f"Slot   : {slot_name or ''}\n"
-        f"Time   : {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n"
-    )
-    try:
-        print_user_id_and_cut(text)  # prints text and auto-cuts
-    except Exception as e:
-        print(f"[Printer] order slip error: {e}")
-
+ 
 def _today_datestr():
     return date.today().isoformat()
+  
 
-def get_active_slot_code():
-    slot = get_current_slot_row()
-    return (slot["slot_code"] if slot else None, slot)
-
-def get_slot_limits(conn, emp_id: str, slot_code: str):
-    row = conn.execute("""
-        SELECT per_item_max, slot_total_max, daily_total_max
-        FROM user_slot_limits
-        WHERE emp_id=? AND slot_code=?
-        LIMIT 1
-    """, (emp_id, slot_code)).fetchone()
-    if row:
-        return dict(row)
-    row = conn.execute("""
-        SELECT per_item_max, slot_total_max, daily_total_max
-        FROM default_slot_limits
-        WHERE slot_code=?
-        LIMIT 1
-    """, (slot_code,)).fetchone()
-    return (dict(row) if row else {"per_item_max": None, "slot_total_max": None, "daily_total_max": None})
-
-def get_usage_today(conn, emp_id: str, slot_code: str):
-    r = conn.execute("""
-        SELECT COALESCE(SUM(qty),0) AS total
-        FROM orders
-        WHERE emp_id=? AND slot_code=? AND DATE(order_time)=DATE('now','localtime')
-    """, (emp_id, slot_code)).fetchone()
-    slot_total_today = int(r["total"])
-    r = conn.execute("""
-        SELECT COALESCE(SUM(qty),0) AS total
-        FROM orders
-        WHERE emp_id=? AND DATE(order_time)=DATE('now','localtime')
-    """, (emp_id,)).fetchone()
-    day_total_today = int(r["total"])
-    rows = conn.execute("""
-        SELECT item_code, COALESCE(SUM(qty),0) AS qty
-        FROM orders
-        WHERE emp_id=? AND slot_code=? AND DATE(order_time)=DATE('now','localtime')
-        GROUP BY item_code
-    """, (emp_id, slot_code)).fetchall()
-    per_item_today = {str(rr["item_code"]): int(rr["qty"]) for rr in rows} if rows else {}
-    return {
-        "slot_total_today": slot_total_today,
-        "day_total_today": day_total_today,
-        "per_item_today": per_item_today
-    }
-
-class SlotLimitError(Exception):
-    def __init__(self, code: str, message: str, meta: dict | None = None):
-        super().__init__(message)
-        self.code = code
-        self.meta = meta or {}
-
-def validate_items_against_limits(conn, *, emp_id: str, slot_code: str, grouped_items: dict[str,int]):
-    limits = get_slot_limits(conn, emp_id, slot_code)
-    per_item_max    = limits.get("per_item_max")
-    slot_total_max  = limits.get("slot_total_max")
-    daily_total_max = limits.get("daily_total_max")
-    usage = get_usage_today(conn, emp_id, slot_code)
-    used_per_item   = usage["per_item_today"]
-    used_slot_total = usage["slot_total_today"]
-    used_day_total  = usage["day_total_today"]
-    order_total_qty = sum(max(0, int(q)) for q in grouped_items.values())
-    if per_item_max is not None:
-        for code, q in grouped_items.items():
-            q = max(0, int(q))
-            already = int(used_per_item.get(str(code), 0))
-            if already + q > int(per_item_max):
-                raise SlotLimitError(
-                    "per_item_exceeded",
-                    f"Per-item limit exceeded for {code}.",
-                    {"item_code": code, "limit": int(per_item_max), "used": already, "requested": q,
-                     "remaining": max(0, int(per_item_max) - already)}
-                )
-    if slot_total_max is not None:
-        if used_slot_total + order_total_qty > int(slot_total_max):
-            raise SlotLimitError(
-                "slot_total_exceeded",
-                "Slot total exceeded.",
-                {"limit": int(slot_total_max), "used": used_slot_total,
-                 "requested": order_total_qty,
-                 "remaining": max(0, int(slot_total_max) - used_slot_total)}
-            )
-    if daily_total_max is not None:
-        if used_day_total + order_total_qty > int(daily_total_max):
-            raise SlotLimitError(
-                "daily_total_exceeded",
-                "Daily total (across slots) limit exceeded.",
-                {"limit": int(daily_total_max), "used": used_day_total,
-                 "requested": order_total_qty,
-                 "remaining": max(0, int(daily_total_max) - used_day_total)}
-            )
-    return {
-        "ok": True,
-        "limits": limits,
-        "used": usage,
-        "order_total_qty": order_total_qty
-    }
-
-def group_items_for_limits(conn, items_in: list):
-    grouped: dict[str,int] = {}
-    for raw in items_in:
-        code, qty = _resolve_item_full(conn, raw)
-        if not code:
-            continue
-        qty = int(qty) if str(qty).isdigit() else 1
-        if qty <= 0: qty = 1
-        grouped[code] = grouped.get(code, 0) + qty
-    return grouped
-
-
+ 
+ 
+ 
 # -----------------------------------------------------------------------------
 # UI routes
 # -----------------------------------------------------------------------------
@@ -3340,198 +3140,7 @@ def relay_action(action):
     return jsonify({"ok": True, "on": relay.value == 1})
 
 
-# -----------------------------------------------------------------------------
-# Order API (helpers + submit)
-# -----------------------------------------------------------------------------
-def _resolve_item_full(conn, item_obj):
-    if isinstance(item_obj, str):
-        return item_obj.strip(), 1
-    if not isinstance(item_obj, dict):
-        return None, None
-
-    def _deep_get_code(v):
-        if isinstance(v, str):
-            return v
-        if isinstance(v, dict):
-            for kk in ("item_code", "code", "id", "item_id", "value"):
-                vv = v.get(kk)
-                if isinstance(vv, str) and vv.strip():
-                    return vv
-        return None
-
-    code = None
-    for k in ("item_code", "code", "item", "id", "item_id"):
-        if k in item_obj and item_obj[k] is not None:
-            code = _deep_get_code(item_obj[k])
-            if code:
-                break
-
-    if not code:
-        look_name = None
-        for k in ("item_name", "name", "label", "title"):
-            v = item_obj.get(k)
-            if isinstance(v, str):
-                look_name = v.strip()
-            elif isinstance(v, dict):
-                for kk in ("text", "value", "name", "label"):
-                    vv = v.get(kk)
-                    if isinstance(vv, str) and vv.strip():
-                        look_name = vv.strip()
-                        break
-            if look_name:
-                break
-        if look_name:
-            row = conn.execute(
-                "SELECT item_code FROM items WHERE lower(item_name)=lower(?) LIMIT 1",
-                (look_name,)
-            ).fetchone()
-            if row:
-                code = row["item_code"]
-
-    try:
-        qty = int(item_obj.get("qty", 1))
-    except Exception:
-        qty = 1
-    if qty <= 0:
-        qty = 1
-
-    if isinstance(code, str):
-        code = code.strip()
-    else:
-        code = None
-
-    return (code or None), qty
-
-
-def place_order_core(*, emp_id: str, item_code: str, qty: int):
-    """
-    Minimal core: resolves item_name + category, inserts order row(s), prints slip.
-    """
-    conn = get_db_connection()
-    try:
-        slot_code, slot_row = get_active_slot_code()
-        if not slot_code:
-            return False, {"reason": "closed", "message": "Canteen is closed"}
-        # Resolve item name and category (menu)
-        row = conn.execute("""
-            SELECT i.item_code, i.item_name, m.menu_name, m.menu_code
-            FROM items i
-            JOIN menu_codes m ON m.menu_code = i.menu_code
-            WHERE i.item_code=?
-            LIMIT 1
-        """, (item_code,)).fetchone()
-        if not row:
-            return False, {"reason": "unknown_item", "message": f"Unknown item_code '{item_code}'"}
-        item_name = row["item_name"]
-        category  = row["menu_name"]
-        shift_name = slot_row["shift_name"] if slot_row else ""
-        slot_name  = slot_row["slot_name"] if slot_row else ""
-
-        # Insert order(s)
-        order_id = generate_order_id()
-        conn.execute("""
-            INSERT INTO orders (order_id, emp_id, device_id, shift_code, slot_code, category, item_code, item_name, qty, order_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            order_id, emp_id, get_device_id(),
-            slot_row["shift_code"] if slot_row else None,
-            slot_code, category, item_code, item_name, int(qty),
-            _now_iso()
-        ))
-        conn.commit()
-
-        # Print slip
-        try:
-            print_order_receipt(order_id, emp_id, item_name, category, slot_name, shift_name)
-        except Exception:
-            pass
-
-        return True, {
-            "order_id": order_id,
-            "item": {
-                "item_code": item_code,
-                "item_name": item_name,
-                "category": category,
-                "qty": int(qty),
-            }
-        }
-    finally:
-        conn.close()
-
-
-@app.route("/api/order_submit", methods=["POST"])
-def order_submit():
-    data = request.get_json(silent=True) or {}
-
-    emp_id = (data.get("emp_id") or data.get("employee_id") or data.get("user_id") or "")
-    emp_id = str(emp_id).strip()
-    if not emp_id:
-        return jsonify({
-            "success": False,
-            "message": "emp_id missing (accepted keys: emp_id / employee_id / user_id).",
-            "echo": data
-        }), 400
-
-    items_in = data.get("items")
-    if not items_in:
-        if any(k in data for k in ("item_code", "code", "item", "item_name", "name", "label", "title", "id", "item_id")):
-            items_in = [data]
-        else:
-            return jsonify({
-                "success": False,
-                "message": "emp_id and items are required.",
-                "hint": "Send items like [{'item_code':'TEA','qty':1}] or use 'item_name'.",
-                "echo": data
-            }), 400
-
-    conn = get_db_connection()
-    try:
-        slot_code, slot_row = get_active_slot_code()
-        if not slot_code:
-            return jsonify({"success": False, "rejected": [{"reason": "closed", "message": "Canteen is closed"}], "accepted": []}), 400
-
-        grouped = group_items_for_limits(conn, items_in)
-        try:
-            _ = validate_items_against_limits(conn, emp_id=emp_id, slot_code=slot_code, grouped_items=grouped)
-        except SlotLimitError as e:
-            return jsonify({
-                "success": False,
-                "accepted": [],
-                "rejected": [{"reason": e.code, "message": str(e), "meta": e.meta}]
-            }), 400
-
-        successes, failures = [], []
-        for raw in items_in:
-            code, qty = _resolve_item_full(conn, raw)
-            if not code:
-                failures.append({"input": raw, "reason": "unresolved_item", "message": "Could not resolve to known item_code/item_name"})
-                continue
-
-            ok, payload = place_order_core(emp_id=emp_id, item_code=code, qty=qty)
-            if ok:
-                successes.append({
-                    "item_code": code,
-                    "qty": qty,
-                    "order_id": payload.get("order_id"),
-                    "item": payload.get("item")
-                })
-            else:
-                failures.append({
-                    "item_code": code,
-                    "qty": qty,
-                    **payload
-                })
-
-        overall_ok = len(successes) > 0
-        return jsonify({
-            "success": overall_ok,
-            "accepted": successes,
-            "rejected": failures
-        }), (200 if overall_ok else 400)
-    finally:
-        conn.close()
-
-
+ 
 # -----------------------------------------------------------------------------
 # Admin gates (face/finger/rfid/password)
 # -----------------------------------------------------------------------------
@@ -3925,71 +3534,7 @@ def api_export_zip():
     except Exception as e:
         abort(500, f"Export failed: {e}")
 
-
-# -----------------------------------------------------------------------------
-# Themed Categories & Items browsing
-# -----------------------------------------------------------------------------
-@app.route('/api/categories')
-def api_categories():
-    db = get_db_connection()
-    categories = [row['menu_name'] for row in db.execute("SELECT DISTINCT menu_name FROM menu_codes")]
-    db.close()
-    return jsonify(categories=categories)
-
-
-@app.route('/api/items_for_category')
-def api_items_for_category():
-    category = request.args.get('category')
-    db = get_db_connection()
-    rows = db.execute("SELECT menu_code FROM menu_codes WHERE menu_name=?", (category,)).fetchall()
-    if not rows:
-        db.close()
-        return jsonify(items=[])
-    items = []
-    for r in rows:
-        items.extend([row['item_name'] for row in db.execute("SELECT item_name FROM items WHERE menu_code=?", (r['menu_code'],))])
-    db.close()
-    return jsonify(items=items)
-
-
-# -----------------------------------------------------------------------------
-# Users list API (paginated)
-# -----------------------------------------------------------------------------
-import logging
-
-@app.get("/api/users_list")
-def api_users_list():
-    try:
-        limit  = int(request.args.get("limit", "5000"))
-        offset = int(request.args.get("offset", "0"))
-
-        sql = """
-            SELECT emp_id, name
-            FROM users
-            ORDER BY CAST(emp_id AS TEXT) ASC
-            LIMIT ? OFFSET ?
-        """
-        params = (limit, offset)
-
-        conn = get_db_connection()
-        try:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-        finally:
-            conn.close()
-
-        users = []
-        for r in rows:
-            emp_id = "" if r[0] is None else str(r[0])
-            name   = "" if r[1] is None else str(r[1])
-            users.append({"emp_id": emp_id, "name": name})
-
-        return jsonify(success=True, users=users)
-    except Exception as e:
-        logging.exception("Error in /api/users_list")
-        return jsonify(success=False, message=str(e)), 500
-
+ 
 
 # -----------------------------------------------------------------------------
 # QR image helper for handoff tokens

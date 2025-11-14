@@ -162,208 +162,257 @@
   </div>
 
   <script>
-    // State
-    let discoveredDevices = [];
-    let savedDeviceIPs = [];
-    let selfIP = '';
+  // State
+  let discoveredDevices = [];
+  let savedDeviceIPs = [];
+  let selfIP = '';
 
-    // Init
-    (async function init(){
-      await loadSelfIP();
-      await loadSavedDevices();
-      // get any devices already known by server
-      await fetchDevicesOnce();
-    })();
+  // Init
+  (async function init(){
+    await loadSelfIP();
+    await loadSavedDevices();
+    // get any devices already known by server
+    await fetchDevicesOnce();
+  })();
 
-    // Helpers
-    function showAlert(msg, type='success', timeout=4500){
-      const box = document.getElementById('alertBox');
-      box.className = 'alert';
-      box.textContent = msg;
-      if (!msg) { box.style.display='none'; return; }
-      box.style.display = 'block';
-      box.classList.add(type === 'success' ? 'alert-success' : 'alert-error', 'show');
-      if (timeout) setTimeout(()=>{ box.classList.remove('show'); box.style.display='none'; }, timeout);
+  // Helpers
+  function showAlert(msg, type='success', timeout=4500){
+    const box = document.getElementById('alertBox');
+    box.className = 'alert';
+    box.textContent = msg;
+    if (!msg) { box.style.display='none'; return; }
+    box.style.display = 'block';
+    box.classList.add(type === 'success' ? 'alert-success' : 'alert-error', 'show');
+    if (timeout) setTimeout(()=>{ box.classList.remove('show'); box.style.display='none'; }, timeout);
+  }
+
+  function setButtonsRunning(running){
+    document.querySelectorAll('#discoverBtn, #discoverBtnTop, #saveBtn, #saveBtnTop')
+      .forEach(b => b.disabled = running);
+  }
+
+  async function loadSelfIP(){
+    try {
+      const res = await fetch('/api/my_ip');
+      const d = await res.json();
+      selfIP = d.ip || '';
+      document.getElementById('selfIp').textContent = selfIP || 'Unknown';
+    } catch (err) {
+      console.warn('my_ip error', err);
+      document.getElementById('selfIp').textContent = 'Error';
     }
+  }
 
-    function setButtonsRunning(running){
-      document.querySelectorAll('#discoverBtn, #discoverBtnTop, #saveBtn, #saveBtnTop').forEach(b => b.disabled = running);
-    }
-
-    async function loadSelfIP(){
-      try {
-        const res = await fetch('/api/my_ip');
-        const d = await res.json();
-        selfIP = d.ip || '';
-        document.getElementById('selfIp').textContent = selfIP || 'Unknown';
-      } catch (err) {
-        console.warn('my_ip error', err);
-        document.getElementById('selfIp').textContent = 'Error';
-      }
-    }
-
-    async function loadSavedDevices(){
-      try {
-        const res = await fetch('/api/saved_mesh');
-        const d = await res.json();
-        if (d && d.success) {
-          savedDeviceIPs = d.saved || [];
-          document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
-        } else {
-          savedDeviceIPs = [];
-        }
-      } catch (err) {
-        console.warn('saved_mesh error', err);
+  async function loadSavedDevices(){
+    try {
+      const res = await fetch('/api/saved_mesh');
+      const d = await res.json();
+      if (d && d.success) {
+        savedDeviceIPs = d.saved || [];
+        document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
+      } else {
         savedDeviceIPs = [];
       }
+    } catch (err) {
+      console.warn('saved_mesh error', err);
+      savedDeviceIPs = [];
     }
+  }
 
-    // Trigger discovery and poll /api/devices
-    async function discoverDevices(){
-      setButtonsRunning(true);
-      showAlert('', '');
-      renderLoading();
+  // Trigger discovery and poll /api/devices
+  async function discoverDevices(){
+    setButtonsRunning(true);
+    showAlert('', '');
+    renderLoading();
 
-      try {
-        // fire discovery trigger (server broadcasts)
-        await fetch('/api/discover_now', { method: 'GET' }).catch(()=>{});
+    try {
+      // fire discovery trigger (server broadcasts)
+      await fetch('/api/discover_now', { method: 'GET' }).catch(()=>{});
 
-        // poll /api/devices for a short window to collect replies
-        const maxMs = 6000;
-        const intervalMs = 600;
-        const deadline = Date.now() + maxMs;
-        let attempts = 0;
-        while (Date.now() < deadline) {
-          attempts++;
-          await new Promise(r => setTimeout(r, intervalMs));
-          await fetchDevicesOnce();
-          if (discoveredDevices.length >= 1 && attempts > 1) break; // short-circuit when at least one appears
-        }
-
-        renderDevices();
-        showAlert(`Discovery finished — found ${discoveredDevices.length} device(s)`, 'success');
-      } catch (err) {
-        console.error('Discovery error', err);
-        showAlert('Discovery failed: ' + (err.message || err), 'error');
-        renderDevices();
-      } finally {
-        setButtonsRunning(false);
+      // poll /api/devices for a short window to collect replies
+      const maxMs = 6000;
+      const intervalMs = 600;
+      const deadline = Date.now() + maxMs;
+      let attempts = 0;
+      while (Date.now() < deadline) {
+        attempts++;
+        await new Promise(r => setTimeout(r, intervalMs));
+        await fetchDevicesOnce();
+        if (discoveredDevices.length >= 1 && attempts > 1) break; // short-circuit when at least one appears
       }
-    }
 
-    // Fetch /api/devices once and normalize
-    async function fetchDevicesOnce(){
-      try {
-        const res = await fetch('/api/devices');
-        const d = await res.json();
-        let arr = [];
-        if (Array.isArray(d)) {
-          arr = d;
-        } else if (d && typeof d === 'object') {
-          // object keyed by ip
-          for (const [ip,info] of Object.entries(d)) {
-            if (info && typeof info === 'object') {
-              arr.push(Object.assign({ ip }, info));
-            } else {
-              arr.push({ ip, info });
-            }
+      renderDevices();
+      showAlert(`Discovery finished — found ${discoveredDevices.length} device(s)`, 'success');
+    } catch (err) {
+      console.error('Discovery error', err);
+      showAlert('Discovery failed: ' + (err.message || err), 'error');
+      renderDevices();
+    } finally {
+      setButtonsRunning(false);
+    }
+  }
+
+  // Fetch /api/devices once and normalize
+  async function fetchDevicesOnce(){
+    try {
+      const res = await fetch('/api/devices');
+      const d = await res.json();
+      let arr = [];
+
+      // Support different possible shapes:
+      // 1) { devices: [...] }
+      if (Array.isArray(d?.devices)) {
+        arr = d.devices;
+      }
+      // 2) plain array [...]
+      else if (Array.isArray(d)) {
+        arr = d;
+      }
+      // 3) object keyed by IP (current KNOWN_DEVICES style)
+      else if (d && typeof d === 'object') {
+        for (const [ip, info] of Object.entries(d)) {
+          if (info && typeof info === 'object') {
+            arr.push(Object.assign({ ip }, info));
+          } else {
+            arr.push({ ip });
           }
         }
-        // normalize, filter selfIP
-        discoveredDevices = arr.filter(x => x.ip && x.ip !== selfIP).map(x => ({
-          ip: x.ip,
-          last_seen: x.last_seen || Math.floor(Date.now()/1000),
-          info: x.info || {}
-        }));
-        renderDevices();
-        return true;
-      } catch (err) {
-        console.warn('fetchDevices error', err);
-        return false;
       }
-    }
 
-    function renderLoading(){
-      const list = document.getElementById('deviceList');
-      list.innerHTML = `<div class="empty-state"><div class="spinner"></div><div>Scanning network, waiting for responses…</div></div>`;
-      updateStats();
-    }
-
-    function renderDevices(){
-      const list = document.getElementById('deviceList');
-      if (!discoveredDevices || discoveredDevices.length === 0){
-        list.innerHTML = `<div class="empty-state"><div style="font-size:44px; margin-bottom:10px;">📡</div><div>No devices found. Make sure other devices are running and on the same network.</div></div>`;
-        updateStats();
-        return;
-      }
-      list.innerHTML = '';
-      discoveredDevices.forEach(dev => {
-        const isSaved = savedDeviceIPs.includes(dev.ip);
-        const name = (dev.info && (dev.info.device_name || dev.info.name)) || 'Unknown Device';
-        const timeSince = getTimeSince(dev.last_seen || Math.floor(Date.now()/1000));
-        const item = document.createElement('div');
-        item.className = 'device-item';
-        item.innerHTML = `
-          <input type="checkbox" class="device-checkbox" data-ip="${escapeHtml(dev.ip)}" ${isSaved ? 'checked' : ''}>
-          <div style="flex:1">
-            <div class="device-ip">${escapeHtml(dev.ip)}</div>
-            <div class="device-details">${escapeHtml(name)} • Last seen ${timeSince}</div>
-          </div>
-          <div>
-            ${isSaved ? '<span class="badge badge-saved">In Network</span>' : '<span class="badge badge-online">Online</span>'}
-          </div>
-        `;
-        list.appendChild(item);
-      });
-      updateStats();
-    }
-
-    function getTimeSince(ts){
-      const seconds = Math.floor(Date.now()/1000 - ts);
-      if (seconds < 60) return 'just now';
-      if (seconds < 3600) return Math.floor(seconds/60) + ' min ago';
-      if (seconds < 86400) return Math.floor(seconds/3600) + ' hr ago';
-      return Math.floor(seconds/86400) + ' days ago';
-    }
-
-    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-    function updateStats(){
-      document.getElementById('totalDevices').textContent = discoveredDevices.length;
-      const selected = document.querySelectorAll('.device-checkbox:checked').length;
-      document.getElementById('selectedDevices').textContent = selected;
-      document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
-    }
-
-    // Save selected IPs to server
-    async function saveSelectedDevices(){
-      const selected = Array.from(document.querySelectorAll('.device-checkbox:checked')).map(cb => cb.dataset.ip);
-      if (!selected.length) { showAlert('Please select at least one device to save', 'error'); return; }
-      setButtonsRunning(true);
-      try {
-        const res = await fetch('/api/save_mesh_devices', {
-          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ devices: selected })
+      // normalize, filter out self, flatten device_id + name
+      discoveredDevices = arr
+        .filter(x => x.ip && x.ip !== selfIP)
+        .map(x => {
+          const meta = x.info && typeof x.info === 'object' ? x.info : x;
+          const ip = x.ip;
+          const device_id = meta.device_id || null;
+          const name = meta.device_name || meta.name || null;
+          const last_seen = x.last_seen || meta.last_seen || Math.floor(Date.now() / 1000);
+          return { ip, device_id, name, last_seen };
         });
-        const d = await res.json();
-        if (d && d.success) {
-          savedDeviceIPs = d.saved || selected;
-          showAlert('Saved mesh network successfully', 'success');
-          renderDevices();
-        } else {
-          showAlert('Save failed: ' + (d && d.message ? d.message : 'Unknown error'), 'error');
-        }
-      } catch (err) {
-        console.error('saveSelectedDevices error', err);
-        showAlert('Save failed: ' + (err.message || err), 'error');
-      } finally {
-        setButtonsRunning(false);
-      }
+
+      renderDevices();
+      return true;
+    } catch (err) {
+      console.warn('fetchDevices error', err);
+      return false;
+    }
+  }
+
+  function renderLoading(){
+    const list = document.getElementById('deviceList');
+    list.innerHTML = `
+      <div class="empty-state">
+        <div class="spinner"></div>
+        <div>Scanning network, waiting for responses…</div>
+      </div>`;
+    updateStats();
+  }
+
+  function renderDevices(){
+    const list = document.getElementById('deviceList');
+
+    if (!discoveredDevices || discoveredDevices.length === 0){
+      list.innerHTML = `
+        <div class="empty-state">
+          <div style="font-size:44px; margin-bottom:10px;">📡</div>
+          <div>No devices found. Make sure other devices are running and on the same network.</div>
+        </div>`;
+      updateStats();
+      return;
     }
 
-    // keep stats responsive when a checkbox changes
-    document.addEventListener('change', (e) => {
-      if (e.target && e.target.classList && e.target.classList.contains('device-checkbox')) updateStats();
+    list.innerHTML = '';
+    discoveredDevices.forEach(dev => {
+      const isSaved = savedDeviceIPs.includes(dev.ip);
+      const label = dev.device_id
+        ? `${dev.device_id} (${dev.ip})`      // <-- Device ID + IP
+        : dev.ip;                             // fallback if no device_id yet
+      const timeSince = getTimeSince(dev.last_seen || Math.floor(Date.now()/1000));
+      const name = dev.name || 'Unknown Device';
+      const details = name
+        ? `${name} • Last seen ${timeSince}`
+        : `Last seen ${timeSince}`;
+
+      const item = document.createElement('div');
+      item.className = 'device-item';
+      item.innerHTML = `
+        <input type="checkbox" class="device-checkbox" data-ip="${escapeHtml(dev.ip)}" ${isSaved ? 'checked' : ''}>
+        <div style="flex:1">
+          <div class="device-ip">${escapeHtml(label)}</div>
+          <div class="device-details">${escapeHtml(details)}</div>
+        </div>
+        <div>
+          ${isSaved
+            ? '<span class="badge badge-saved">In Network</span>'
+            : '<span class="badge badge-online">Online</span>'}
+        </div>
+      `;
+      list.appendChild(item);
     });
-  </script>
+
+    updateStats();
+  }
+
+  function getTimeSince(ts){
+    const seconds = Math.floor(Date.now()/1000 - ts);
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return Math.floor(seconds/60) + ' min ago';
+    if (seconds < 86400) return Math.floor(seconds/3600) + ' hr ago';
+    return Math.floor(seconds/86400) + ' days ago';
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => (
+      {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+    ));
+  }
+
+  function updateStats(){
+    document.getElementById('totalDevices').textContent = discoveredDevices.length;
+    const selected = document.querySelectorAll('.device-checkbox:checked').length;
+    document.getElementById('selectedDevices').textContent = selected;
+    document.getElementById('savedDevices').textContent = savedDeviceIPs.length;
+  }
+
+  // Save selected IPs to server
+  async function saveSelectedDevices(){
+    const selected = Array.from(document.querySelectorAll('.device-checkbox:checked'))
+      .map(cb => cb.dataset.ip);
+    if (!selected.length) {
+      showAlert('Please select at least one device to save', 'error');
+      return;
+    }
+    setButtonsRunning(true);
+    try {
+      const res = await fetch('/api/save_mesh_devices', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ devices: selected })
+      });
+      const d = await res.json();
+      if (d && d.success) {
+        savedDeviceIPs = d.saved || selected;
+        showAlert('Saved mesh network successfully', 'success');
+        renderDevices();
+      } else {
+        showAlert('Save failed: ' + (d && d.message ? d.message : 'Unknown error'), 'error');
+      }
+    } catch (err) {
+      console.error('saveSelectedDevices error', err);
+      showAlert('Save failed: ' + (err.message || err), 'error');
+    } finally {
+      setButtonsRunning(false);
+    }
+  }
+
+  // keep stats responsive when a checkbox changes
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('device-checkbox')) {
+      updateStats();
+    }
+  });
+</script>
+
 </body>
 </html>
