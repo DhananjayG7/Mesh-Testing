@@ -3144,8 +3144,12 @@ def relay_action(action):
 # -----------------------------------------------------------------------------
 # Admin gates (face/finger/rfid/password)
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Admin gates (face/finger/rfid/password)
+# -----------------------------------------------------------------------------
 def _is_operator_role(role: str | None) -> bool:
-    if not role: return False
+    if not role:
+        return False
     r = role.strip().lower()
     return r in ("admin", "super admin", "superadmin")
 
@@ -3154,31 +3158,51 @@ def _fetch_user_row(emp_id=None):
     """
     Fetch user row from users table and return a dict.
     If emp_id is None, returns the most recently inserted user.
-    Uses column names from your schema: emp_id, name, display_image, face_encoding, template_id.
+
+    Uses column names from your schema:
+
+        emp_id, name, display_image, face_encoding,
+        rfid_cards, role, template_id, birthdate
     """
+    conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        cols = ["emp_id", "name", "display_image", "face_encoding", "template_id"]
+
+        # IMPORTANT: include role so operator checks work
+        cols = [
+            "emp_id",
+            "name",
+            "display_image",
+            "face_encoding",
+            "rfid_cards",
+            "role",
+            "template_id",
+            "birthdate",
+        ]
+
         if emp_id:
             q = f"SELECT {', '.join(cols)} FROM users WHERE emp_id = ? LIMIT 1"
             c.execute(q, (emp_id,))
         else:
             q = f"SELECT {', '.join(cols)} FROM users ORDER BY rowid DESC LIMIT 1"
             c.execute(q)
+
         row = c.fetchone()
-        row_dict = _row_to_dict(c, row)
-        conn.close()
+        row_dict = _row_to_dict(c, row) if row else None
         return row_dict
+
     except Exception as e:
-        # Keep error informative for logs
         print("[MESH] _fetch_user_row error:", e)
-        try:
-            conn.close()
-        except Exception:
-            pass
         return None
-        
+
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
         
 def broadcast_user_upsert_by_emp(emp_id):
     """
